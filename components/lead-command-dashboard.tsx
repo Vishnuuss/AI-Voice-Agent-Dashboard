@@ -1,6 +1,10 @@
 "use client"
 
 import { useMemo, useRef, useState, useCallback } from "react"
+import { useLeads, useLeadStats } from '@/hooks/use-leads'
+import { useCampaigns, useCampaignStats, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
+import { useCalls, useCallStats } from '@/hooks/use-calls'
+import { useSettings } from '@/hooks/use-settings'
 import {
   Activity,
   ArrowDownRight,
@@ -121,182 +125,12 @@ type Lead = {
   transcript: TranscriptMessage[]
 }
 
-const leads: Lead[] = [
-  { 
-    initials: "AK", name: "Arjun Kumar", phone: "+91 98111 21471", source: "Meta Ads", score: 92, status: "Qualified", time: "2 min ago", email: "arjun.k@gmail.com", location: "Gachibowli, Hyderabad", budget: "₹1.2 Cr – ₹1.5 Cr", propertyType: "3BHK Apartment", callDuration: "4:32", callDate: "2025-07-18", notes: "Ready to move, needs east-facing unit. Wants parking for 2 cars.", 
-    transcript: [
-      { speaker: "Agent", text: "Hello, good morning! Am I speaking with Mr. Arjun Kumar?" }, 
-      { speaker: "Lead", text: "Yes, speaking. Who is this?" }, 
-      { speaker: "Agent", text: "Hi Arjun, this is SREECRM's AI assistant calling regarding your inquiry on Facebook for our premium 3BHK project, Skyline Heights, in Gachibowli. Is this a good time to talk?" }, 
-      { speaker: "Lead", text: "Yeah, I saw the ad. Go ahead, but make it quick. I have a meeting in 10 minutes." }, 
-      { speaker: "Agent", text: "I'll keep it brief. You showed interest in our 3BHK units. Are you looking to move in immediately, or is this an investment for later?" }, 
-      { speaker: "Lead", text: "I'm looking for something ready to move. My current lease expires in two months, so I need to shift soon." },
-      { speaker: "Agent", text: "Understood. Skyline Heights has ready-to-move-in units. We have an exclusive East-facing 3BHK available right now on the 12th floor which fits your timeline perfectly. Does your budget fall in the 1.2 to 1.5 Crores range?" },
-      { speaker: "Lead", text: "Yes, that's roughly my budget. Does the price include parking?" },
-      { speaker: "Agent", text: "Yes, the pricing includes two dedicated covered car parking spots. Would you like to schedule a site visit this weekend to see the actual flat?" },
-      { speaker: "Lead", text: "Saturday morning works for me. Around 10 AM." },
-      { speaker: "Agent", text: "Excellent! I'll schedule your visit for Saturday at 10 AM. Our sales manager will meet you at the lobby. I will send you the location pin and brochure on WhatsApp right now." },
-      { speaker: "Lead", text: "Okay, send it. Thanks." },
-      { speaker: "Agent", text: "You're welcome, Arjun. Have a great day ahead!" }
-    ] 
-  },
-  { 
-    initials: "SP", name: "Sravani Priya", phone: "+91 91222 78322", source: "Excel", score: 84, status: "Site visit", time: "12 min ago", email: "sravani.p@outlook.com", location: "Kondapur, Hyderabad", budget: "₹80 L – ₹1 Cr", propertyType: "2BHK Apartment", callDuration: "3:15", callDate: "2025-07-18", followUpDate: "2025-07-20", notes: "Wants site visit tomorrow, interested in 2BHK near IT corridor.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi Sravani, this is SREECRM calling about your property inquiry." }, 
-      { speaker: "Lead", text: "Yes, I submitted my details at the property expo last week." },
-      { speaker: "Agent", text: "Thank you for stopping by! I wanted to share more details about our 2BHK apartments in Kondapur, starting from ₹82 lakhs. Are you looking for self-use or investment?" },
-      { speaker: "Lead", text: "It's for my parents actually. They are moving to Hyderabad next year, so we are looking for a secure gated community." },
-      { speaker: "Agent", text: "That's wonderful. Our Kondapur project is perfect for families, with a 24/7 medical clinic on-site, walking tracks, and a very active senior citizens' club." },
-      { speaker: "Lead", text: "That sounds promising. What is the handover date?" },
-      { speaker: "Agent", text: "Handover starts in March 2026. The structure is already complete and finishing work is going on." },
-      { speaker: "Lead", text: "Okay. I want to visit the site tomorrow with my husband to check the sample flat." }, 
-      { speaker: "Agent", text: "Absolutely! We have a beautifully furnished model flat. I'll book a slot for you tomorrow at 11 AM. Would that work?" }, 
-      { speaker: "Lead", text: "Yes, 11 AM is perfect. Please share the Google Maps link." },
-      { speaker: "Agent", text: "I'll WhatsApp it to you immediately. See you tomorrow!" }
-    ] 
-  },
-  { 
-    initials: "NM", name: "Nikhil M", phone: "+91 87444 90244", source: "Excel", score: 21, status: "Not interested", time: "1 hr ago", email: "nikhil.m@yahoo.com", location: "Kukatpally, Hyderabad", budget: "₹40 L – ₹55 L", propertyType: "1BHK Apartment", callDuration: "0:52", callDate: "2025-07-18", notes: "Already purchased a property elsewhere.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi Nikhil, this is SREECRM calling regarding your real estate inquiry." }, 
-      { speaker: "Lead", text: "Why are you guys calling me again? I told your colleague last month to take my name off the list." }, 
-      { speaker: "Agent", text: "I sincerely apologize for the inconvenience, Nikhil. Just to update my records, are you no longer looking for a property?" },
-      { speaker: "Lead", text: "I already bought a flat in KPHB. I don't need any more calls." },
-      { speaker: "Agent", text: "Congratulations on your new home! I will permanently remove your number from our calling list right now. Have a great day." },
-      { speaker: "Lead", text: "Yeah, thanks. Bye." }
-    ] 
-  },
-  { 
-    initials: "MD", name: "Mohammed Dawood", phone: "+91 91666 33445", source: "Meta Ads", score: 95, status: "Site visit", time: "2 hrs ago", email: "md.dawood@gmail.com", location: "Banjara Hills, Hyderabad", budget: "₹1.8 Cr – ₹2.5 Cr", propertyType: "3BHK Penthouse", callDuration: "5:04", callDate: "2025-07-17", followUpDate: "2025-07-20", notes: "Very interested in penthouse. Scheduled Sunday visit.", 
-    transcript: [
-      { speaker: "Lead", text: "Hello? I saw your ad for the penthouse in Banjara Hills." }, 
-      { speaker: "Agent", text: "Hi! Yes, we are currently offering exclusive penthouses in our new luxury project in Banjara Hills. Thank you for reaching out." }, 
-      { speaker: "Lead", text: "What is the square footage? The ad didn't mention it clearly." },
-      { speaker: "Agent", text: "We have two penthouse layouts available. One is 3,200 square feet, and the larger one is 3,800 square feet with a private terrace." },
-      { speaker: "Lead", text: "I want to see the bigger one. We need at least 3,500 sqft." }, 
-      { speaker: "Agent", text: "The 3,800 sqft unit is stunning, located on the 18th floor with a panoramic city view and a private plunge pool. The base price is 2.1 Crores." },
-      { speaker: "Lead", text: "That works within my budget. Can I visit this Sunday?" },
-      { speaker: "Agent", text: "Certainly. I'll schedule an exclusive walkthrough for you this Sunday at 11 AM." }, 
-      { speaker: "Lead", text: "Perfect. My wife and my interior designer will also join me." }, 
-      { speaker: "Agent", text: "Wonderful! We'll have our lead architect present as well, in case your designer has any technical questions about modifications." },
-      { speaker: "Lead", text: "That is very helpful. See you Sunday." }
-    ] 
-  },
-  { 
-    initials: "AT", name: "Anil Teja", phone: "+91 87888 77889", source: "Excel", score: 12, status: "Not interested", time: "4 hrs ago", email: "anil.teja@gmail.com", location: "Secunderabad", budget: "N/A", propertyType: "N/A", callDuration: "0:18", callDate: "2025-07-17", notes: "Wrong number — not the intended contact.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi, am I speaking with Anil Teja regarding the property inquiry?" }, 
-      { speaker: "Lead", text: "Wrong number. Nobody named Anil here." },
-      { speaker: "Agent", text: "My apologies for disturbing you. Have a good day." }
-    ] 
-  },
-  { 
-    initials: "MN", name: "Manasa N", phone: "+91 87222 55667", source: "Excel", score: 38, status: "Not interested", time: "7 hrs ago", email: "manasa.n@gmail.com", location: "LB Nagar, Hyderabad", budget: "₹30 L – ₹40 L", propertyType: "1BHK Apartment", callDuration: "1:05", callDate: "2025-07-17", notes: "Budget too low for available inventory.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi Manasa, calling about apartment options in LB Nagar." }, 
-      { speaker: "Lead", text: "Yes, I am looking for a 2BHK. What are the prices?" },
-      { speaker: "Agent", text: "Our 2BHK units in the LB Nagar project start from ₹52 lakhs." },
-      { speaker: "Lead", text: "Oh, that's too high. My budget is strictly between 30 and 40 lakhs." }, 
-      { speaker: "Agent", text: "I understand. Currently, our lowest priced units are at ₹52 lakhs. We don't have anything in the 40 lakh range right now." },
-      { speaker: "Lead", text: "Okay, then I will look elsewhere." },
-      { speaker: "Agent", text: "Thank you for your time, Manasa. Would you like me to notify you if we launch a more affordable project in the future?" },
-      { speaker: "Lead", text: "No, it's fine. Thanks." }
-    ] 
-  },
-  { 
-    initials: "DK", name: "Dinesh Karthik", phone: "+91 98333 77889", source: "Meta Ads", score: 88, status: "Qualified", time: "8 hrs ago", email: "dinesh.k@gmail.com", location: "Bachupally, Hyderabad", budget: "₹55 L – ₹70 L", propertyType: "2BHK Apartment", callDuration: "4:12", callDate: "2025-07-16", notes: "Looking for investment property with good rental yield.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi Dinesh, calling from SREECRM regarding investment properties in Bachupally." }, 
-      { speaker: "Lead", text: "Yes, I am looking to invest. I don't want to live there, I just want something that will rent easily." }, 
-      { speaker: "Agent", text: "Bachupally is a fantastic choice for that. It's an educational hub with huge demand for rentals. Our 2BHK units give an excellent 4.2% rental yield right now." }, 
-      { speaker: "Lead", text: "What's the average rent I can expect?" },
-      { speaker: "Agent", text: "For a semi-furnished 2BHK in our project, current market rent is around ₹22,000 to ₹25,000 per month." },
-      { speaker: "Lead", text: "That's decent. What about property appreciation?" }, 
-      { speaker: "Agent", text: "The area has seen 12% year-on-year appreciation. With the new flyover opening next year, values are expected to jump significantly." }, 
-      { speaker: "Lead", text: "Interesting. Set up a site visit for me this Saturday." },
-      { speaker: "Agent", text: "I will block a slot for you at 2 PM on Saturday. I'll share the details on WhatsApp." }
-    ] 
-  },
-  { 
-    initials: "RS", name: "Rohit Sharma", phone: "+91 99111 33445", source: "Referral", score: 55, status: "Follow-up", time: "6 hrs ago", email: "rohit.s@gmail.com", location: "Financial District, Hyderabad", budget: "₹1.5 Cr – ₹2 Cr", propertyType: "3BHK Apartment", callDuration: "1:30", callDate: "2025-07-17", followUpDate: "2025-07-23", notes: "Needs family discussion before deciding.", 
-    transcript: [
-      { speaker: "Agent", text: "Hi Rohit, following up on the 3BHK at Financial District." }, 
-      { speaker: "Lead", text: "Oh, hi. Yes, I saw the brochure you sent." },
-      { speaker: "Agent", text: "Great! Did you have any questions about the floor plans or amenities?" },
-      { speaker: "Lead", text: "It looks good, but I need to discuss it with my wife. She wants to see the property first before we make any commitments, and she's out of town right now." }, 
-      { speaker: "Agent", text: "Of course, a family decision is important. When is she back in town?" }, 
-      { speaker: "Lead", text: "She'll be back next Tuesday. I will discuss with her and call you back next week." },
-      { speaker: "Agent", text: "Not a problem. I will follow up with you next Wednesday to see if you'd like to schedule a visit together. Have a great week!" }
-    ] 
-  }
-];
-
-for (let i = 8; i < 20; i++) {
-  leads.push({
-    initials: "TL", name: "Test Lead " + (i+1), phone: "+91 90000 000" + i, source: "Website", score: Math.floor(Math.random() * 60) + 40, status: "Follow-up", time: "1 day ago", email: "test" + i + "@example.com", location: "Hyderabad", budget: "₹50 L", propertyType: "2BHK", callDuration: "2:00", callDate: "2025-07-16", notes: "Auto generated lead",
-    transcript: [{ speaker: "Agent", text: "Hello, this is a test transcript." }, { speaker: "Lead", text: "Okay, thanks." }]
-  });
-}
-
-
-const callLogs = [
-  { id: 1, lead: "Arjun Kumar", phone: "+91 98111 21471", direction: "outbound", status: "connected", duration: "4:32", time: "10:15 AM", date: "Today", outcome: "Qualified", agent: "Telugu Agent 01" },
-  { id: 2, lead: "Sravani Priya", phone: "+91 91222 78322", direction: "outbound", status: "connected", duration: "3:15", time: "10:08 AM", date: "Today", outcome: "Site visit booked", agent: "Telugu Agent 01" },
-  { id: 3, lead: "Venkata Rao", phone: "+91 99333 45613", direction: "outbound", status: "connected", duration: "1:45", time: "9:52 AM", date: "Today", outcome: "Follow-up scheduled", agent: "Telugu Agent 02" },
-  { id: 4, lead: "Unknown Caller", phone: "+91 80123 45678", direction: "inbound", status: "missed", duration: "0:00", time: "9:45 AM", date: "Today", outcome: "Missed", agent: "—" },
-  { id: 5, lead: "Nikhil M", phone: "+91 87444 90244", direction: "outbound", status: "connected", duration: "0:52", time: "9:30 AM", date: "Today", outcome: "Not interested", agent: "Telugu Agent 01" },
-  { id: 6, lead: "Rajesh Khanna", phone: "+91 98555 11223", direction: "outbound", status: "connected", duration: "6:18", time: "9:12 AM", date: "Today", outcome: "Qualified — brochure sent", agent: "Telugu Agent 02" },
-  { id: 7, lead: "Mohammed Dawood", phone: "+91 91666 33445", direction: "inbound", status: "connected", duration: "5:04", time: "8:55 AM", date: "Today", outcome: "Site visit Sunday", agent: "Telugu Agent 01" },
-  { id: 8, lead: "Sneha Joshi", phone: "+91 99777 55667", direction: "outbound", status: "connected", duration: "2:10", time: "8:40 AM", date: "Today", outcome: "EMI discussion", agent: "Telugu Agent 02" },
-  { id: 9, lead: "Anil Teja", phone: "+91 87888 77889", direction: "outbound", status: "no-answer", duration: "0:18", time: "8:22 AM", date: "Today", outcome: "Wrong number", agent: "Telugu Agent 01" },
-  { id: 10, lead: "Priya Kumari", phone: "+91 98999 99001", direction: "outbound", status: "connected", duration: "3:44", time: "5:30 PM", date: "Yesterday", outcome: "Qualified — visit booked", agent: "Telugu Agent 01" },
-  { id: 11, lead: "Vijay Singh", phone: "+91 91000 11223", direction: "inbound", status: "connected", duration: "2:55", time: "4:10 PM", date: "Yesterday", outcome: "RERA confirmed", agent: "Telugu Agent 02" },
-  { id: 12, lead: "Surya S", phone: "+91 98777 55667", direction: "outbound", status: "connected", duration: "5:22", time: "3:00 PM", date: "Yesterday", outcome: "VIP tour booked", agent: "Telugu Agent 01" },
-]
-
-const campaigns = [
-  { id: 1, name: "Skyline Heights Launch", status: "active", leads: 342, called: 289, qualified: 47, startDate: "Jul 10, 2025", agent: "Telugu Agent 01", segment: "Gachibowli interested", budget: "₹15,000" },
-  { id: 2, name: "Kondapur 2BHK Re-engagement", status: "active", leads: 186, called: 142, qualified: 28, startDate: "Jul 14, 2025", agent: "Telugu Agent 02", segment: "Old leads — 2BHK", budget: "₹8,500" },
-  { id: 3, name: "Weekend Open House Reminder", status: "paused", leads: 94, called: 67, qualified: 12, startDate: "Jul 16, 2025", agent: "Telugu Agent 01", segment: "Site visit pending", budget: "₹4,200" },
-  { id: 4, name: "Jubilee Hills Villa Outreach", status: "completed", leads: 58, called: 58, qualified: 9, startDate: "Jul 5, 2025", agent: "Telugu Agent 02", segment: "High-value leads", budget: "₹12,000" },
-  { id: 5, name: "Excel Import Batch — July", status: "active", leads: 220, called: 98, qualified: 15, startDate: "Jul 12, 2025", agent: "Telugu Agent 01", segment: "Excel upload", budget: "₹9,800" },
-]
-
-const notifications = [
-  { id: 1, text: "Arjun Kumar qualified — score 92", time: "2 min ago", read: false },
-  { id: 2, text: "Site visit booked for Sravani Priya — Jul 20", time: "12 min ago", read: false },
-  { id: 3, text: "Campaign 'Skyline Heights' hit 47 qualifications", time: "1 hr ago", read: false },
-  { id: 4, text: "Telugu Agent 02 completed batch — 58/58 calls", time: "3 hrs ago", read: true },
-  { id: 5, text: "New Excel import — 220 leads added", time: "6 hrs ago", read: true },
-  { id: 6, text: "System health check: All services green", time: "12 hrs ago", read: true },
-]
-
-const reportData = {
-  sourceBreakdown: [
-    { name: "Meta Ads", value: 520, fill: "var(--chart-1)" },
-    { name: "Website", value: 310, fill: "var(--chart-2)" },
-    { name: "Excel", value: 280, fill: "var(--chart-3)" },
-    { name: "Referral", value: 174, fill: "var(--chart-4)" },
-  ],
-  weeklyPerformance: [
-    { week: "W1", leads: 180, calls: 145, qualified: 28 },
-    { week: "W2", leads: 220, calls: 198, qualified: 42 },
-    { week: "W3", leads: 310, calls: 268, qualified: 56 },
-    { week: "W4", leads: 284, calls: 252, qualified: 48 },
-  ],
-  agentPerformance: [
-    { agent: "Telugu Agent 01", calls: 312, connected: 248, qualified: 68, avgDuration: "3:12", satisfaction: 94 },
-    { agent: "Telugu Agent 02", calls: 276, connected: 210, qualified: 56, avgDuration: "2:48", satisfaction: 91 },
-  ],
-}
-
-const metrics = [
-  { label: "Total leads", value: "1,284", note: "+12.4%", trend: "up" as const, icon: Users },
-  { label: "Calls connected", value: "436", note: "51.8% connect", trend: "up" as const, icon: PhoneCall },
-  { label: "Qualified", value: "124", note: "+18.2%", trend: "up" as const, icon: Target },
-  { label: "Cost / minute", value: "₹3.86", note: "₹0.24 lower", trend: "down" as const, icon: CircleDollarSign },
-]
+const leads: Lead[] = []
+const callLogs: any[] = []
+const campaigns: any[] = []
+const notifications: any[] = []
+const reportData = { sourceBreakdown: [], weeklyPerformance: [], agentPerformance: [] }
+const metrics: any[] = []
 
 // ─── HELPER COMPONENTS ──────────────────────────────────
 
@@ -1207,13 +1041,89 @@ export function LeadCommandDashboard() {
   const [notifs, setNotifs] = useState(notifications)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const visibleLeads = useMemo(
-    () => leads.filter((lead) =>
+  // Real data hooks
+  const { leads: dbLeads, totalCount, isLoading: leadsLoading, refresh: refreshLeads } = useLeads(query, statusFilter === 'All' ? '' : statusFilter, 1)
+  const { stats: leadStats, refresh: refreshStats } = useLeadStats()
+  const { campaigns: dbCampaigns, isLoading: campaignsLoading, refresh: refreshCampaigns } = useCampaigns()
+  const { stats: campaignStats } = useCampaignStats()
+  const { calls: dbCalls, isLoading: callsLoading, refresh: refreshCalls } = useCalls('all')
+  const { stats: callStats } = useCallStats()
+
+  const visibleLeads = useMemo(() => {
+    // If we have real data from the API, map it to UI format
+    if (dbLeads && dbLeads.length > 0) {
+      return dbLeads.map((dl: any) => ({
+        initials: (dl.name || 'UK').split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase(),
+        name: dl.name || 'Unknown',
+        phone: dl.phone || '',
+        source: dl.source || 'Unknown',
+        score: dl.score || 0,
+        status: dl.qualification === 'qualified' ? 'Qualified' : dl.call_outcome === 'completed' ? 'Called' : dl.status === 'queued' ? 'Queued' : dl.follow_up_date ? 'Follow-up' : dl.status === 'new' ? 'New' : dl.status || 'New',
+        time: dl.created_at ? new Date(dl.created_at).toLocaleDateString() : '',
+        email: dl.email || '',
+        location: dl.city || '',
+        budget: dl.budget || 'N/A',
+        propertyType: dl.property_type || 'N/A',
+        callDuration: '—',
+        callDate: dl.last_attempt_at ? new Date(dl.last_attempt_at).toLocaleDateString() : '',
+        followUpDate: dl.follow_up_date || undefined,
+        notes: dl.notes || '',
+        transcript: [],
+        id: dl.id,
+        recording_url: dl.recording_url,
+        transcript_url: dl.transcript_url,
+      }))
+    }
+    // Fallback to mock data
+    return leads.filter((lead) =>
       `${lead.name} ${lead.source} ${lead.status} ${lead.location} ${lead.phone}`.toLowerCase().includes(query.toLowerCase()) &&
       (statusFilter === "All" || lead.status === statusFilter)
-    ),
-    [query, statusFilter],
-  )
+    )
+  }, [query, statusFilter, dbLeads])
+
+  const [newCampaignName, setNewCampaignName] = useState("")
+  const [newCampaignLeadCount, setNewCampaignLeadCount] = useState("100")
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const res = await fetch('/api/leads/upload', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(`Uploaded: ${data.summary.valid} leads added, ${data.summary.duplicate} duplicates, ${data.summary.rejected} rejected`)
+        refreshLeads()
+        refreshStats()
+      } else {
+        toast.error(data.error || 'Upload failed')
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Upload failed')
+    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleLaunchCampaign = async () => {
+    if (!newCampaignName) {
+      toast.error("Please enter a campaign name")
+      return
+    }
+    try {
+      const result = await launchCampaign({
+        campaign_name: newCampaignName,
+        lead_count: parseInt(newCampaignLeadCount) || 100,
+        concurrency: 1,
+      })
+      toast.success(`Campaign launched! ${result.leads_queued || 0} leads queued.`)
+      setCampaignOpen(false)
+      refreshCampaigns()
+      setNewCampaignName("")
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to launch campaign')
+    }
+  }
 
   const handleNavClick = useCallback((label: string) => {
     setActiveNav(label)
@@ -1352,7 +1262,7 @@ export function LeadCommandDashboard() {
             />
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx" onChange={() => toast.success("Leads imported successfully! 42 new leads added.")} />
+            <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx" onChange={handleFileUpload} />
             <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
               <Upload data-icon="inline-start" />Import leads
             </Button>
@@ -1495,34 +1405,22 @@ export function LeadCommandDashboard() {
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
               <label className="text-sm font-medium">Campaign name</label>
-              <Input placeholder="e.g., Weekend Open House Push" />
+              <Input placeholder="e.g., Weekend Open House Push" value={newCampaignName} onChange={e => setNewCampaignName(e.target.value)} />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Number of leads to call</label>
+              <Input type="number" placeholder="100" value={newCampaignLeadCount} onChange={e => setNewCampaignLeadCount(e.target.value)} />
             </div>
             <div className="grid gap-2">
               <label className="text-sm font-medium">Target segment</label>
               <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option>All uncontacted leads (128)</option>
-                <option>Follow-ups today (12)</option>
-                <option>Site visits unconfirmed (5)</option>
-                <option>Meta Ads leads only (520)</option>
-                <option>High score leads (&gt;80)</option>
+                <option>All new leads</option>
               </select>
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Agent</label>
-              <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option>Telugu Agent 01</option>
-                <option>Telugu Agent 02</option>
-                <option>Both agents</option>
-              </select>
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Agent prompt</label>
-              <textarea className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="E.g., Remind them about the site visit tomorrow..." />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCampaignOpen(false)}>Cancel</Button>
-            <Button onClick={() => { setCampaignOpen(false); toast.success("Campaign started! Agent is dialing.") }}>Launch Campaign</Button>
+            <Button onClick={handleLaunchCampaign} disabled={!newCampaignName || campaignsLoading}>Launch Campaign</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
