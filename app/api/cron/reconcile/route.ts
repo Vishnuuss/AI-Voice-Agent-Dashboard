@@ -26,7 +26,7 @@ export async function POST(request: Request) {
         const runs = await dograh.getCampaignRuns(campaign.dograh_campaign_id, 1, 100);
         let completedCount = 0;
 
-        for (const run of runs.data || []) {
+        for (const run of runs.runs || []) {
           // Check if dograh_run_id exists
           const { data: existingLog } = await supabase
             .from('call_logs')
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
             const payload = {
               run_id: run.id,
               status: run.status,
-              phone_number: run.contact_phone,
+              phone_number: run.phone_number,
               duration: run.duration,
               recording_url: run.recording_url,
               transcript_url: run.transcript_url,
@@ -107,7 +107,7 @@ export async function POST(request: Request) {
         
         // If dograh says campaign is completed, update our status
         const progress = await dograh.getCampaignProgress(campaign.dograh_campaign_id);
-        if (progress.status === 'completed' || progress.status === 'finished') {
+        if (progress.state === 'completed' || progress.state === 'finished') {
            await supabase.from('campaign_runs').update({ status: 'completed' }).eq('id', campaign.id);
         }
       } catch (err) {

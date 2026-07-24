@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { dograh } from '@/lib/dograh';
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const { searchParams } = new URL(request.url);
     const page = parseInt(searchParams.get('page') || '1', 10);
     const limit = parseInt(searchParams.get('limit') || '20', 10);
@@ -13,7 +14,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const { data: campaign, error } = await supabase
       .from('campaign_runs')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', id)
       .single();
 
     if (error || !campaign) {
@@ -22,7 +23,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
     const runs = await dograh.getCampaignRuns(campaign.dograh_campaign_id, page, limit);
 
-    return NextResponse.json({ runs });
+    return NextResponse.json(runs);
   } catch (error: any) {
     console.error('Error GET /api/campaigns/[id]/runs:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

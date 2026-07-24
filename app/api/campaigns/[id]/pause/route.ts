@@ -2,14 +2,15 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { dograh } from '@/lib/dograh';
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const supabase = createServerClient();
     
     const { data: campaign, error } = await supabase
       .from('campaign_runs')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', id)
       .single();
 
     if (error || !campaign) {
@@ -21,7 +22,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const { data: updated, error: updateError } = await supabase
       .from('campaign_runs')
       .update({ status: 'paused', paused_at: new Date().toISOString() })
-      .eq('id', params.id)
+      .eq('id', id)
       .select()
       .single();
 
@@ -32,6 +33,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
     return NextResponse.json({ campaign: updated });
   } catch (error: any) {
     console.error('Error POST /api/campaigns/[id]/pause:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
   }
 }

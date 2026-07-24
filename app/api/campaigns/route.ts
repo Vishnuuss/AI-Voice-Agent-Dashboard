@@ -15,6 +15,41 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    // Auto-reconcile: check Dograh for any "running" campaigns and update status
+    const runningCampaigns = (campaigns || []).filter(c => c.status === 'running' && c.dograh_campaign_id);
+    
+    for (const campaign of runningCampaigns) {
+      try {
+        const progress = await dograh.getCampaignProgress(campaign.dograh_campaign_id);
+        
+        if (progress.state === 'completed' || progress.state === 'finished') {
+          await supabase
+            .from('campaign_runs')
+            .update({ status: 'completed', completed_at: new Date().toISOString() })
+            .eq('id', campaign.id);
+          campaign.status = 'completed';
+          campaign.completed_at = new Date().toISOString();
+        } else if (progress.state === 'failed' || progress.state === 'cancelled') {
+          await supabase
+            .from('campaign_runs')
+            .update({ status: progress.state, completed_at: new Date().toISOString() })
+            .eq('id', campaign.id);
+          campaign.status = progress.state;
+          campaign.completed_at = new Date().toISOString();
+        } else if (progress.state === 'paused') {
+          await supabase
+            .from('campaign_runs')
+            .update({ status: 'paused', paused_at: new Date().toISOString() })
+            .eq('id', campaign.id);
+          campaign.status = 'paused';
+        }
+        // If still 'running' or 'queued' in Dograh, keep as is
+      } catch (progressErr) {
+        // If Dograh API fails for this campaign, skip — don't block the response
+        console.warn(`Failed to check Dograh progress for campaign ${campaign.id}:`, progressErr);
+      }
+    }
+
     return NextResponse.json({ campaigns: campaigns || [] });
   } catch (error: any) {
     console.error('Error GET /api/campaigns:', error);

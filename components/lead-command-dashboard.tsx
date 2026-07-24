@@ -174,6 +174,8 @@ function OverviewPage({
   setStatusFilter,
   setActiveNav,
   exportReport,
+  leadStats,
+  callStats,
 }: {
   range: string
   setRange: (v: string) => void
@@ -186,7 +188,13 @@ function OverviewPage({
   setStatusFilter: (v: string) => void
   setActiveNav: (v: string) => void
   exportReport: () => void
+  leadStats: any
+  callStats: any
 }) {
+  const totalLeads = leadStats?.total ?? 0
+  const qualifiedLeads = leadStats?.qualified ?? 0
+  const totalCalls = callStats?.total ?? 0
+  const connectedCalls = callStats?.connected ?? 0
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -207,23 +215,45 @@ function OverviewPage({
       </section>
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {metrics.map((metric) => (
-          <Card key={metric.label}>
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex size-9 items-center justify-center rounded-lg bg-secondary">
-                  <metric.icon className="size-4 text-muted-foreground" />
-                </div>
-                <span className={cn("flex items-center gap-1 text-xs font-medium", metric.trend === "up" ? "text-primary" : "text-muted-foreground")}>
-                  {metric.note}
-                  {metric.trend === "up" ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />}
-                </span>
-              </div>
-              <p className="mt-4 text-2xl font-semibold tracking-tight">{metric.value}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{metric.label}</p>
-            </CardContent>
-          </Card>
-        ))}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary"><Users className="size-4 text-muted-foreground" /></div>
+              <span className="flex items-center gap-1 text-xs font-medium text-primary"><ArrowUpRight className="size-3" /></span>
+            </div>
+            <p className="mt-4 text-2xl font-semibold tracking-tight">{totalLeads.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Total leads</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary"><PhoneCall className="size-4 text-muted-foreground" /></div>
+              <span className="flex items-center gap-1 text-xs font-medium text-primary">{connectedCalls > 0 && totalCalls > 0 ? `${((connectedCalls / totalCalls) * 100).toFixed(0)}% connect` : ''}<ArrowUpRight className="size-3" /></span>
+            </div>
+            <p className="mt-4 text-2xl font-semibold tracking-tight">{totalCalls.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Calls made</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary"><Target className="size-4 text-muted-foreground" /></div>
+              <span className="flex items-center gap-1 text-xs font-medium text-primary"><ArrowUpRight className="size-3" /></span>
+            </div>
+            <p className="mt-4 text-2xl font-semibold tracking-tight">{qualifiedLeads.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Qualified</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary"><CircleDollarSign className="size-4 text-muted-foreground" /></div>
+            </div>
+            <p className="mt-4 text-2xl font-semibold tracking-tight">{callStats?.avg_duration ? `${Math.floor(callStats.avg_duration / 60)}:${String(Math.round(callStats.avg_duration % 60)).padStart(2, '0')}` : '0:00'}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Avg call duration</p>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1.55fr_1fr]">
@@ -264,14 +294,14 @@ function OverviewPage({
         <Card>
           <CardHeader>
             <CardTitle>Today&apos;s funnel</CardTitle>
-            <CardDescription>From 168 imported leads</CardDescription>
+            <CardDescription>From {totalLeads} total leads</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
             {[
-              { label: "Dialled", value: 142, percent: 85 },
-              { label: "Connected", value: 78, percent: 55 },
-              { label: "Engaged", value: 52, percent: 37 },
-              { label: "Qualified", value: 21, percent: 15 },
+              { label: "Total leads", value: totalLeads, percent: 100 },
+              { label: "Calls made", value: totalCalls, percent: totalLeads > 0 ? Math.round((totalCalls / totalLeads) * 100) : 0 },
+              { label: "Connected", value: connectedCalls, percent: totalCalls > 0 ? Math.round((connectedCalls / totalCalls) * 100) : 0 },
+              { label: "Qualified", value: qualifiedLeads, percent: totalLeads > 0 ? Math.round((qualifiedLeads / totalLeads) * 100) : 0 },
             ].map((step) => (
               <div key={step.label} className="flex flex-col gap-2">
                 <div className="flex items-center justify-between text-sm">
@@ -283,8 +313,8 @@ function OverviewPage({
             ))}
             <div className="flex items-center justify-between rounded-lg bg-secondary p-3">
               <div>
-                <p className="text-sm font-medium">14.8% qualification</p>
-                <p className="text-xs text-muted-foreground">3.1% above last week</p>
+                <p className="text-sm font-medium">{totalLeads > 0 ? ((qualifiedLeads / totalLeads) * 100).toFixed(1) : '0'}% qualification</p>
+                <p className="text-xs text-muted-foreground">From all leads</p>
               </div>
               <Target className="size-5 text-primary" />
             </div>
@@ -365,56 +395,31 @@ function OverviewPage({
         <Card>
           <CardHeader className="flex-row items-center justify-between">
             <div>
-              <CardTitle>Live operations</CardTitle>
-              <CardDescription>Agent and campaign status</CardDescription>
+              <CardTitle>Campaign status</CardTitle>
+              <CardDescription>Active campaigns overview</CardDescription>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="rounded-lg border p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="relative flex size-3">
-                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-40" />
-                    <span className="relative inline-flex size-3 rounded-full bg-primary" />
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium">Telugu Agent 01</p>
-                    <p className="text-xs text-muted-foreground">Speaking with lead</p>
-                  </div>
-                </div>
-                <Badge>Live · 01:42</Badge>
-              </div>
-              <div className="mt-4 flex items-center gap-3 rounded-md bg-secondary p-3">
-                <div className="flex size-8 items-center justify-center rounded-full bg-background">
-                  <UserRound className="size-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">Rajesh N.</p>
-                  <p className="truncate text-xs text-muted-foreground">Budget discussion · Telugu</p>
-                </div>
-                <Clock3 className="size-4 text-muted-foreground" />
-              </div>
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg bg-secondary p-3">
-                <p className="text-xs text-muted-foreground">Active calls</p>
-                <p className="mt-1 text-xl font-semibold">1 / 2</p>
+                <p className="text-xs text-muted-foreground">Total leads</p>
+                <p className="mt-1 text-xl font-semibold">{totalLeads}</p>
               </div>
               <div className="rounded-lg bg-secondary p-3">
-                <p className="text-xs text-muted-foreground">Queue</p>
-                <p className="mt-1 text-xl font-semibold">37</p>
+                <p className="text-xs text-muted-foreground">Qualified</p>
+                <p className="mt-1 text-xl font-semibold">{qualifiedLeads}</p>
               </div>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Hostinger VPS</span>
-              <Badge variant="outline">Healthy</Badge>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">n8n sync</span>
-              <span className="font-medium">18 sec ago</span>
+              <Badge variant="outline">Connected</Badge>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Supabase</span>
+              <Badge variant="outline">Connected</Badge>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Dograh</span>
               <Badge variant="outline">Connected</Badge>
             </div>
           </CardContent>
@@ -424,16 +429,20 @@ function OverviewPage({
   )
 }
 
-function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterOpen, setFilterOpen, setStatusFilter }: {
+function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterOpen, setFilterOpen, setStatusFilter, totalCount, leadPage, setLeadPage, totalPages, leadStats }: {
   query: string; statusFilter: string; visibleLeads: Lead[]; setSelectedLead: (l: Lead) => void
   filterOpen: boolean; setFilterOpen: (v: boolean) => void; setStatusFilter: (v: string) => void
+  totalCount: number; leadPage: number; setLeadPage: (v: number) => void; totalPages: number; leadStats: any
 }) {
+  const qualified = leadStats?.qualified ?? visibleLeads.filter(l => l.status === 'Qualified').length
+  const newLeads = leadStats?.new_leads ?? visibleLeads.filter(l => l.status === 'New').length
+  const called = leadStats?.called ?? visibleLeads.filter(l => l.status === 'Called').length
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">All Leads</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage and track all {leads.length} leads across sources.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Manage and track all {totalCount} leads across sources.</p>
         </div>
         <div className="flex items-center gap-2">
           <DropdownMenu open={filterOpen} onOpenChange={setFilterOpen}>
@@ -443,19 +452,19 @@ function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterO
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setStatusFilter("All")}>All</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setStatusFilter("Qualified")}>Qualified</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setStatusFilter("Site visit")}>Site visit</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setStatusFilter("Follow-up")}>Follow-up</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setStatusFilter("Not interested")}>Not interested</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setStatusFilter("new")}>New</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setStatusFilter("queued")}>Queued</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setStatusFilter("called")}>Called</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{leads.filter(l => l.status === "Qualified").length}</p><p className="text-xs text-muted-foreground">Qualified</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{leads.filter(l => l.status === "Site visit").length}</p><p className="text-xs text-muted-foreground">Site visits</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{leads.filter(l => l.status === "Follow-up").length}</p><p className="text-xs text-muted-foreground">Follow-ups</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{leads.filter(l => l.status === "Not interested").length}</p><p className="text-xs text-muted-foreground">Not interested</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{totalCount}</p><p className="text-xs text-muted-foreground">Total leads</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{qualified}</p><p className="text-xs text-muted-foreground">Qualified</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{newLeads}</p><p className="text-xs text-muted-foreground">New</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{called}</p><p className="text-xs text-muted-foreground">Called</p></CardContent></Card>
       </div>
 
       <Card className="min-w-0">
@@ -473,8 +482,10 @@ function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterO
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visibleLeads.map((lead) => (
-                <TableRow key={lead.phone} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedLead(lead)}>
+              {visibleLeads.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No leads found. Upload a CSV to import leads.</TableCell></TableRow>
+              ) : visibleLeads.map((lead) => (
+                <TableRow key={lead.phone || lead.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedLead(lead)}>
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <Avatar className="size-8"><AvatarFallback>{lead.initials}</AvatarFallback></Avatar>
@@ -488,13 +499,13 @@ function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterO
                   <TableCell><span className="text-sm text-muted-foreground">{lead.location}</span></TableCell>
                   <TableCell><span className="text-sm">{lead.budget}</span></TableCell>
                   <TableCell>
-    <div className="flex items-center gap-2">
-      {(() => {
-        const scoreData = getScoreLabel(lead.score);
-        return <Badge variant="outline" className={`${scoreData.color} ${scoreData.bg} border-transparent`}>{scoreData.label}</Badge>
-      })()}
-    </div>
-  </TableCell>
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const scoreData = getScoreLabel(lead.score);
+                        return <Badge variant="outline" className={`${scoreData.color} ${scoreData.bg} border-transparent`}>{scoreData.label}</Badge>
+                      })()}
+                    </div>
+                  </TableCell>
                   <TableCell><StatusBadge status={lead.status} /></TableCell>
                   <TableCell className="text-right text-muted-foreground">{lead.time}</TableCell>
                 </TableRow>
@@ -503,19 +514,35 @@ function LeadsPage({ query, statusFilter, visibleLeads, setSelectedLead, filterO
           </Table>
         </CardContent>
       </Card>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">Page {leadPage} of {totalPages} ({totalCount} leads)</p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" disabled={leadPage <= 1} onClick={() => setLeadPage(leadPage - 1)}>Previous</Button>
+            <Button variant="outline" size="sm" disabled={leadPage >= totalPages} onClick={() => setLeadPage(leadPage + 1)}>Next</Button>
+          </div>
+        </div>
+      )}
     </>
   )
 }
 
-function CallsPage() {
+function CallsPage({ calls, callStats }: { calls: any[]; callStats: any }) {
   const [callFilter, setCallFilter] = useState("all")
-  const filtered = callFilter === "all" ? callLogs : callLogs.filter(c => c.direction === callFilter || c.status === callFilter)
+  const allCalls = calls.length > 0 ? calls : callLogs
+  const filtered = callFilter === "all" ? allCalls : allCalls.filter((c: any) => c.direction === callFilter || c.status === callFilter)
+  const totalCalls = callStats?.total ?? allCalls.length
+  const connectedCalls = callStats?.connected ?? allCalls.filter((c: any) => c.status === "connected").length
+  const missedCalls = callStats?.missed ?? allCalls.filter((c: any) => c.status === "missed" || c.status === "no-answer").length
+  const avgDuration = callStats?.avg_duration ? `${Math.floor(callStats.avg_duration / 60)}:${String(Math.round(callStats.avg_duration % 60)).padStart(2, '0')}` : "0:00"
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Call History</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{callLogs.length} calls today across 2 agents.</p>
+          <p className="mt-1 text-sm text-muted-foreground">{totalCalls} calls recorded.</p>
         </div>
         <Tabs value={callFilter} onValueChange={setCallFilter}>
           <TabsList>
@@ -528,10 +555,10 @@ function CallsPage() {
       </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneCall className="size-4 text-primary" /><span className="text-2xl font-semibold">{callLogs.length}</span></div><p className="text-xs text-muted-foreground">Total calls</p></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneForwarded className="size-4 text-primary" /><span className="text-2xl font-semibold">{callLogs.filter(c => c.status === "connected").length}</span></div><p className="text-xs text-muted-foreground">Connected</p></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneMissed className="size-4 text-destructive" /><span className="text-2xl font-semibold">{callLogs.filter(c => c.status === "missed" || c.status === "no-answer").length}</span></div><p className="text-xs text-muted-foreground">Missed / No answer</p></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><Clock3 className="size-4 text-muted-foreground" /><span className="text-2xl font-semibold">3:12</span></div><p className="text-xs text-muted-foreground">Avg. duration</p></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneCall className="size-4 text-primary" /><span className="text-2xl font-semibold">{totalCalls}</span></div><p className="text-xs text-muted-foreground">Total calls</p></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneForwarded className="size-4 text-primary" /><span className="text-2xl font-semibold">{connectedCalls}</span></div><p className="text-xs text-muted-foreground">Connected</p></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><PhoneMissed className="size-4 text-destructive" /><span className="text-2xl font-semibold">{missedCalls}</span></div><p className="text-xs text-muted-foreground">Missed / No answer</p></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="flex items-center gap-2"><Clock3 className="size-4 text-muted-foreground" /><span className="text-2xl font-semibold">{avgDuration}</span></div><p className="text-xs text-muted-foreground">Avg. duration</p></CardContent></Card>
       </div>
 
       <Card className="min-w-0">
@@ -543,26 +570,26 @@ function CallsPage() {
                 <TableHead>Lead</TableHead>
                 <TableHead>Direction</TableHead>
                 <TableHead>Duration</TableHead>
-                <TableHead>Agent</TableHead>
                 <TableHead>Outcome</TableHead>
                 <TableHead className="text-right">Time</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((call) => (
-                <TableRow key={call.id}>
-                  <TableCell><CallStatusIcon status={call.status} direction={call.direction} /></TableCell>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No calls recorded yet. Launch a campaign to start calling.</TableCell></TableRow>
+              ) : filtered.map((call: any, i: number) => (
+                <TableRow key={call.id || i}>
+                  <TableCell><CallStatusIcon status={call.status || call.outcome} direction={call.direction || 'outbound'} /></TableCell>
                   <TableCell>
                     <div>
-                      <p className="font-medium">{call.lead}</p>
-                      <p className="text-xs text-muted-foreground">{call.phone}</p>
+                      <p className="font-medium">{call.lead || call.lead_name || 'Unknown'}</p>
+                      <p className="text-xs text-muted-foreground">{call.phone || call.lead_phone || ''}</p>
                     </div>
                   </TableCell>
-                  <TableCell><Badge variant="outline" className="capitalize">{call.direction}</Badge></TableCell>
-                  <TableCell><span className="font-mono text-sm">{call.duration}</span></TableCell>
-                  <TableCell><span className="text-sm">{call.agent}</span></TableCell>
-                  <TableCell><span className="text-sm">{call.outcome}</span></TableCell>
-                  <TableCell className="text-right text-sm text-muted-foreground">{call.time}<br /><span className="text-xs">{call.date}</span></TableCell>
+                  <TableCell><Badge variant="outline" className="capitalize">{call.direction || 'outbound'}</Badge></TableCell>
+                  <TableCell><span className="font-mono text-sm">{call.duration ? (typeof call.duration === 'number' ? `${Math.floor(call.duration / 60)}:${String(Math.round(call.duration % 60)).padStart(2, '0')}` : call.duration) : '0:00'}</span></TableCell>
+                  <TableCell><span className="text-sm">{call.outcome || call.status || '—'}</span></TableCell>
+                  <TableCell className="text-right text-sm text-muted-foreground">{call.called_at ? new Date(call.called_at).toLocaleString() : (call.time || '')}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -573,12 +600,56 @@ function CallsPage() {
   )
 }
 
-function CampaignsPage({ setCampaignOpen }: { setCampaignOpen: (v: boolean) => void }) {
-  const [localCampaigns, setLocalCampaigns] = useState(campaigns)
-  const togglePause = (id: number) => {
-    setLocalCampaigns(prev => prev.map(c => c.id === id ? { ...c, status: c.status === "active" ? "paused" : c.status === "paused" ? "active" : c.status } : c))
-    toast.success("Campaign status updated")
+function CampaignsPage({ setCampaignOpen, campaignsData, refreshCampaigns }: { setCampaignOpen: (v: boolean) => void; campaignsData: any[]; refreshCampaigns: () => void }) {
+  const displayCampaigns = campaignsData.length > 0 ? campaignsData : campaigns
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [pausingId, setPausingId] = useState<string | null>(null)
+  const [campaignRuns, setCampaignRuns] = useState<Record<string, any[]>>({})
+  const [loadingRuns, setLoadingRuns] = useState<string | null>(null)
+
+  const handleTogglePause = async (campaign: any) => {
+    if (pausingId) return
+    setPausingId(campaign.id)
+    try {
+      if (campaign.status === 'running' || campaign.status === 'active') {
+        await pauseCampaign(campaign.id)
+        toast.success(`Campaign "${campaign.campaign_name || campaign.name}" paused`)
+      } else if (campaign.status === 'paused') {
+        await resumeCampaign(campaign.id)
+        toast.success(`Campaign "${campaign.campaign_name || campaign.name}" resumed`)
+      }
+      refreshCampaigns()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update campaign')
+    } finally {
+      setPausingId(null)
+    }
   }
+
+  const handleToggleDetails = async (campaign: any) => {
+    if (expandedId === campaign.id) {
+      setExpandedId(null)
+      return
+    }
+    setExpandedId(campaign.id)
+    if (!campaignRuns[campaign.id]) {
+      setLoadingRuns(campaign.id)
+      try {
+        const res = await fetch(`/api/campaigns/${campaign.id}/runs?limit=50`)
+        if (res.ok) {
+          const data = await res.json()
+          setCampaignRuns(prev => ({ ...prev, [campaign.id]: data.runs || data || [] }))
+        }
+      } catch (e) {
+        console.warn('Failed to fetch campaign runs:', e)
+      } finally {
+        setLoadingRuns(null)
+      }
+    }
+  }
+
+  const activeCampaigns = displayCampaigns.filter((c: any) => c.status === 'running' || c.status === 'active').length
+  const totalTargeted = displayCampaigns.reduce((a: number, c: any) => a + (c.requested_count || c.actual_count || c.leads || 0), 0)
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -590,14 +661,27 @@ function CampaignsPage({ setCampaignOpen }: { setCampaignOpen: (v: boolean) => v
       </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{localCampaigns.filter(c => c.status === "active").length}</p><p className="text-xs text-muted-foreground">Active campaigns</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{localCampaigns.reduce((a, c) => a + c.leads, 0).toLocaleString()}</p><p className="text-xs text-muted-foreground">Total leads targeted</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{localCampaigns.reduce((a, c) => a + c.called, 0)}</p><p className="text-xs text-muted-foreground">Total calls made</p></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{localCampaigns.reduce((a, c) => a + c.qualified, 0)}</p><p className="text-xs text-muted-foreground">Total qualified</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{activeCampaigns}</p><p className="text-xs text-muted-foreground">Active campaigns</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{totalTargeted.toLocaleString()}</p><p className="text-xs text-muted-foreground">Total leads targeted</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{displayCampaigns.length}</p><p className="text-xs text-muted-foreground">Total campaigns</p></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-2xl font-semibold">{displayCampaigns.filter((c: any) => c.status === 'completed').length}</p><p className="text-xs text-muted-foreground">Completed</p></CardContent></Card>
       </div>
 
       <div className="flex flex-col gap-4">
-        {localCampaigns.map((campaign) => (
+        {displayCampaigns.length === 0 ? (
+          <Card><CardContent className="p-8 text-center text-muted-foreground">No campaigns yet. Click &quot;New campaign&quot; to launch your first AI calling campaign.</CardContent></Card>
+        ) : displayCampaigns.map((campaign: any) => {
+          const name = campaign.campaign_name || campaign.name || 'Unnamed'
+          const status = campaign.status || 'unknown'
+          const requested = campaign.requested_count || campaign.actual_count || campaign.leads || 0
+          const actual = campaign.actual_count || requested
+          const startDate = campaign.started_at || campaign.created_at ? new Date(campaign.started_at || campaign.created_at).toLocaleDateString() : '—'
+          const isExpanded = expandedId === campaign.id
+          const runs = campaignRuns[campaign.id] || []
+          const answered = runs.filter((r: any) => r.status === 'completed' || r.status === 'answered').length
+          const noAnswer = runs.filter((r: any) => r.status === 'no-answer' || r.status === 'no_answer' || r.status === 'unanswered').length
+          const busy = runs.filter((r: any) => r.status === 'busy' || r.status === 'failed').length
+          return (
           <Card key={campaign.id}>
             <CardContent className="p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -607,35 +691,77 @@ function CampaignsPage({ setCampaignOpen }: { setCampaignOpen: (v: boolean) => v
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-semibold">{campaign.name}</p>
-                      <CampaignStatusBadge status={campaign.status} />
+                      <p className="font-semibold">{name}</p>
+                      <CampaignStatusBadge status={status} />
                     </div>
-                    <p className="text-sm text-muted-foreground">Started {campaign.startDate} · {campaign.agent} · {campaign.segment}</p>
+                    <p className="text-sm text-muted-foreground">Started {startDate} · {actual} leads</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {campaign.status !== "completed" && (
-                    <Button variant="outline" size="sm" onClick={() => togglePause(campaign.id)}>
-                      {campaign.status === "active" ? <><Pause data-icon="inline-start" />Pause</> : <><Play data-icon="inline-start" />Resume</>}
+                  {status !== 'completed' && status !== 'failed' && (
+                    <Button variant="outline" size="sm" disabled={pausingId === campaign.id} onClick={() => handleTogglePause(campaign)}>
+                      {pausingId === campaign.id ? 'Updating...' : (status === 'running' || status === 'active' ? <><Pause data-icon="inline-start" />Pause</> : <><Play data-icon="inline-start" />Resume</>)}
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => toast.info(`Viewing details for "${campaign.name}"`)}>
-                    <Eye data-icon="inline-start" />Details
+                  <Button variant="ghost" size="sm" onClick={() => handleToggleDetails(campaign)}>
+                    <Eye data-icon="inline-start" />{isExpanded ? 'Hide' : 'Details'}
                   </Button>
                 </div>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
-                <div><p className="text-xs text-muted-foreground">Leads</p><p className="text-lg font-semibold">{campaign.leads}</p></div>
-                <div><p className="text-xs text-muted-foreground">Called</p><p className="text-lg font-semibold">{campaign.called}</p></div>
-                <div><p className="text-xs text-muted-foreground">Qualified</p><p className="text-lg font-semibold">{campaign.qualified}</p></div>
-                <div><p className="text-xs text-muted-foreground">Conversion</p><p className="text-lg font-semibold">{((campaign.qualified / campaign.called) * 100).toFixed(1)}%</p></div>
-                <div><p className="text-xs text-muted-foreground">Budget</p><p className="text-lg font-semibold">{campaign.budget}</p></div>
+              <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+                <div><p className="text-xs text-muted-foreground">Leads</p><p className="text-lg font-semibold">{actual}</p></div>
+                <div><p className="text-xs text-muted-foreground">Answered</p><p className="text-lg font-semibold text-green-600">{runs.length > 0 ? answered : '—'}</p></div>
+                <div><p className="text-xs text-muted-foreground">Not answered</p><p className="text-lg font-semibold text-orange-500">{runs.length > 0 ? noAnswer : '—'}</p></div>
+                <div><p className="text-xs text-muted-foreground">Busy / Failed</p><p className="text-lg font-semibold text-red-500">{runs.length > 0 ? busy : '—'}</p></div>
               </div>
-              <div className="mt-3"><Progress value={(campaign.called / campaign.leads) * 100} /></div>
-              <p className="mt-1 text-xs text-muted-foreground">{campaign.called} of {campaign.leads} leads called ({((campaign.called / campaign.leads) * 100).toFixed(0)}%)</p>
+              {isExpanded && (
+                <div className="mt-4 rounded-lg border bg-muted/30 p-4">
+                  <p className="text-sm font-medium mb-3">Call Details</p>
+                  {loadingRuns === campaign.id ? (
+                    <p className="text-sm text-muted-foreground">Loading call details...</p>
+                  ) : runs.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No call records yet. {status === 'running' ? 'Campaign is still in progress.' : ''}</p>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Phone</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Duration</TableHead>
+                            <TableHead className="text-right">Called at</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {runs.map((run: any, idx: number) => (
+                            <TableRow key={run.id || idx}>
+                              <TableCell className="font-mono text-sm">{run.phone_number || run.phone || '—'}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className={
+                                  run.status === 'completed' || run.status === 'answered' ? 'bg-green-500/10 text-green-600 border-green-500/20' :
+                                  run.status === 'no-answer' || run.status === 'no_answer' || run.status === 'unanswered' ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
+                                  'bg-red-500/10 text-red-500 border-red-500/20'
+                                }>{run.status || 'unknown'}</Badge>
+                              </TableCell>
+                              <TableCell>{run.duration ? `${Math.floor(run.duration / 60)}:${String(Math.round(run.duration % 60)).padStart(2, '0')}` : '—'}</TableCell>
+                              <TableCell className="text-right text-sm text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm border-t pt-3">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Created</span><span>{campaign.created_at ? new Date(campaign.created_at).toLocaleString() : '—'}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Completed</span><span>{campaign.completed_at ? new Date(campaign.completed_at).toLocaleString() : '—'}</span></div>
+                    {campaign.paused_at && <div className="flex justify-between"><span className="text-muted-foreground">Paused</span><span>{new Date(campaign.paused_at).toLocaleString()}</span></div>}
+                    <div className="flex justify-between"><span className="text-muted-foreground">Concurrency</span><span>{campaign.concurrency || 1}</span></div>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
-        ))}
+        )})}
       </div>
     </>
   )
@@ -1040,9 +1166,10 @@ export function LeadCommandDashboard() {
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifs, setNotifs] = useState(notifications)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [leadPage, setLeadPage] = useState(1)
 
   // Real data hooks
-  const { leads: dbLeads, totalCount, isLoading: leadsLoading, refresh: refreshLeads } = useLeads(query, statusFilter === 'All' ? '' : statusFilter, 1)
+  const { leads: dbLeads, totalCount, totalPages, isLoading: leadsLoading, refresh: refreshLeads } = useLeads(query, statusFilter === 'All' ? '' : statusFilter, leadPage)
   const { stats: leadStats, refresh: refreshStats } = useLeadStats()
   const { campaigns: dbCampaigns, isLoading: campaignsLoading, refresh: refreshCampaigns } = useCampaigns()
   const { stats: campaignStats } = useCampaignStats()
@@ -1050,7 +1177,6 @@ export function LeadCommandDashboard() {
   const { stats: callStats } = useCallStats()
 
   const visibleLeads = useMemo(() => {
-    // If we have real data from the API, map it to UI format
     if (dbLeads && dbLeads.length > 0) {
       return dbLeads.map((dl: any) => ({
         initials: (dl.name || 'UK').split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase(),
@@ -1074,7 +1200,6 @@ export function LeadCommandDashboard() {
         transcript_url: dl.transcript_url,
       }))
     }
-    // Fallback to mock data
     return leads.filter((lead) =>
       `${lead.name} ${lead.source} ${lead.status} ${lead.location} ${lead.phone}`.toLowerCase().includes(query.toLowerCase()) &&
       (statusFilter === "All" || lead.status === statusFilter)
@@ -1083,6 +1208,7 @@ export function LeadCommandDashboard() {
 
   const [newCampaignName, setNewCampaignName] = useState("")
   const [newCampaignLeadCount, setNewCampaignLeadCount] = useState("100")
+  const [isLaunching, setIsLaunching] = useState(false)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1096,6 +1222,20 @@ export function LeadCommandDashboard() {
         toast.success(`Uploaded: ${data.summary.valid} leads added, ${data.summary.duplicate} duplicates, ${data.summary.rejected} rejected`)
         refreshLeads()
         refreshStats()
+        // Notify n8n webhook about the upload
+        try {
+          const webhookData = new FormData()
+          webhookData.append('file', file)
+          webhookData.append('event', 'lead_uploaded')
+          webhookData.append('batch_id', data.batch_id || '')
+          
+          await fetch('https://pavan2008.app.n8n.cloud/webhook/lead-uploaded', {
+            method: 'POST',
+            body: webhookData
+          })
+        } catch (webhookErr) {
+          console.warn('n8n webhook notification failed (non-critical):', webhookErr)
+        }
       } else {
         toast.error(data.error || 'Upload failed')
       }
@@ -1110,6 +1250,9 @@ export function LeadCommandDashboard() {
       toast.error("Please enter a campaign name")
       return
     }
+    if (isLaunching) return
+    setIsLaunching(true)
+    toast.info("Creating campaign... Please wait.")
     try {
       const result = await launchCampaign({
         campaign_name: newCampaignName,
@@ -1122,6 +1265,8 @@ export function LeadCommandDashboard() {
       setNewCampaignName("")
     } catch (err: any) {
       toast.error(err.message || 'Failed to launch campaign')
+    } finally {
+      setIsLaunching(false)
     }
   }
 
@@ -1130,6 +1275,7 @@ export function LeadCommandDashboard() {
     setSidebarOpen(false)
     setStatusFilter("All")
     setQuery("")
+    setLeadPage(1)
   }, [])
 
   const exportReport = useCallback(() => {
@@ -1154,13 +1300,13 @@ export function LeadCommandDashboard() {
   const renderPage = () => {
     switch (activeNav) {
       case "Overview":
-        return <OverviewPage range={range} setRange={setRange} query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} setActiveNav={setActiveNav} exportReport={exportReport} />
+        return <OverviewPage range={range} setRange={setRange} query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} setActiveNav={setActiveNav} exportReport={exportReport} leadStats={leadStats} callStats={callStats} />
       case "Leads":
-        return <LeadsPage query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} />
+        return <LeadsPage query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} totalCount={totalCount} leadPage={leadPage} setLeadPage={setLeadPage} totalPages={totalPages || 1} leadStats={leadStats} />
       case "Calls":
-        return <CallsPage />
+        return <CallsPage calls={dbCalls} callStats={callStats} />
       case "Campaigns":
-        return <CampaignsPage setCampaignOpen={setCampaignOpen} />
+        return <CampaignsPage setCampaignOpen={setCampaignOpen} campaignsData={dbCampaigns} refreshCampaigns={refreshCampaigns} />
       case "Follow-ups":
         return <FollowUpsPage setSelectedLead={setSelectedLead} />
       case "Reports":
@@ -1400,27 +1546,35 @@ export function LeadCommandDashboard() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Start AI Campaign</DialogTitle>
-            <DialogDescription>Select a segment and configure your agent to start calling.</DialogDescription>
+            <DialogDescription>Configure your AI agent to start calling leads.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-sm font-medium">Available leads</p>
+              <p className="text-2xl font-semibold mt-1">{leadStats?.new_leads ?? 0} <span className="text-sm font-normal text-muted-foreground">new leads ready to call</span></p>
+              <p className="text-xs text-muted-foreground mt-1">{leadStats?.total ?? 0} total · {leadStats?.called ?? 0} already called · {leadStats?.queued ?? 0} queued</p>
+            </div>
+            {(leadStats?.new_leads ?? 0) === 0 && (
+              <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
+                <p className="text-sm text-destructive font-medium">No new leads available</p>
+                <p className="text-xs text-muted-foreground mt-1">Upload a CSV file first to import leads, then create a campaign.</p>
+              </div>
+            )}
             <div className="grid gap-2">
               <label className="text-sm font-medium">Campaign name</label>
               <Input placeholder="e.g., Weekend Open House Push" value={newCampaignName} onChange={e => setNewCampaignName(e.target.value)} />
             </div>
             <div className="grid gap-2">
               <label className="text-sm font-medium">Number of leads to call</label>
-              <Input type="number" placeholder="100" value={newCampaignLeadCount} onChange={e => setNewCampaignLeadCount(e.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Target segment</label>
-              <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option>All new leads</option>
-              </select>
+              <Input type="number" placeholder={String(leadStats?.new_leads ?? 100)} value={newCampaignLeadCount} onChange={e => setNewCampaignLeadCount(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Max: {leadStats?.new_leads ?? 0} new leads</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCampaignOpen(false)}>Cancel</Button>
-            <Button onClick={handleLaunchCampaign} disabled={!newCampaignName || campaignsLoading}>Launch Campaign</Button>
+            <Button onClick={handleLaunchCampaign} disabled={!newCampaignName || isLaunching || (leadStats?.new_leads ?? 0) === 0}>
+              {isLaunching ? 'Creating...' : `Launch Campaign (${Math.min(parseInt(newCampaignLeadCount) || 0, leadStats?.new_leads ?? 0)} leads)`}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

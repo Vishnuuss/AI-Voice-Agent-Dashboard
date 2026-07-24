@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const supabase = createServerClient();
     
     const { data: lead, error: leadError } = await supabase
       .from('leads')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', id)
       .single();
 
     if (leadError) {
@@ -19,7 +20,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const { data: callHistory, error: callsError } = await supabase
       .from('call_logs')
       .select('*')
-      .eq('lead_id', params.id)
+      .eq('lead_id', id)
       .order('created_at', { ascending: false });
 
     if (callsError) {
