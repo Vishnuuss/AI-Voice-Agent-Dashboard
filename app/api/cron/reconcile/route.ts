@@ -1,123 +1,128 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
-import { dograh } from '@/lib/dograh';
-import { WebhookPayload } from '@/types';
+import { DograhClient, dograh } from '@/lib/dograh';
+import { applyRunResult, isAuthorisedCron } from '@/lib/reconcile';
+import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
 
-export async function POST(request: Request) {
+/**
+ * Reconciles our database against Dograh, recovering anything a missed webhook lost.
+ *
+ * Runs on a schedule (see vercel.json). Vercel Cron issues GET requests, so both
+ * GET and POST are exported - the previous POST-only handler was never invoked by
+ * the scheduler.
+ */
+
+export const maxDuration = 60;
+
+const PAGE_SIZE = 100;
+const MAX_PAGES = 20;
+/** A lead dialling for longer than this is considered stuck and is released. */
+const STUCK_LEAD_MINUTES = 60;
+
+async function reconcileCampaign(supabase: ReturnType<typeof createServerClient>, campaign: any) {
+  const providerId = Number(campaign.dograh_campaign_id);
+  const stats = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
+
+  if (!Number.isFinite(providerId)) return stats;
+
+  // Walk every page. The old version only ever fetched page 1 (100 runs), so any
+  // campaign larger than that was permanently under-reconciled.
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { runs, total } = await dograh.getCampaignRuns(providerId, page, PAGE_SIZE);
+    if (!runs.length) break;
+
+    for (const run of runs) {
+      const outcome = await applyRunResult(supabase, run as any, campaign.id);
+      stats[outcome] += 1;
+    }
+
+    if (runs.length < PAGE_SIZE || page * PAGE_SIZE >= (total || 0)) break;
+  }
+
+  // Sync the campaign's own status.
   try {
-    const secret = request.headers.get('x-cron-secret');
-    if (secret !== process.env.CRON_SECRET) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const progress = await dograh.getCampaignProgress(providerId);
+    const mapped = mapDograhStatus(progress?.state);
+    if (mapped && mapped !== campaign.status) {
+      const patch: Record<string, unknown> = { status: mapped, updated_at: new Date().toISOString() };
+      if (isTerminal(mapped)) patch.completed_at = new Date().toISOString();
+      if (mapped === 'paused') patch.paused_at = new Date().toISOString();
+      await supabase.from('campaign_runs').update(patch).eq('id', campaign.id);
     }
+  } catch (err) {
+    console.warn(`[cron:reconcile] progress sync failed for ${campaign.id}`, err);
+  }
 
+  return stats;
+}
+
+/** Frees leads left in `queued` by a crashed launch so they can be dialled again. */
+async function releaseStuckLeads(supabase: ReturnType<typeof createServerClient>) {
+  const cutoff = new Date(Date.now() - STUCK_LEAD_MINUTES * 60_000).toISOString();
+
+  const { data, error } = await supabase
+    .from('leads')
+    .update({ status: 'new', campaign_run_id: null })
+    .eq('status', 'queued')
+    .lt('updated_at', cutoff)
+    .select('id');
+
+  if (error) {
+    console.warn('[cron:reconcile] stuck lead sweep failed', error);
+    return 0;
+  }
+  return data?.length ?? 0;
+}
+
+async function handler(request: Request) {
+  if (!isAuthorisedCron(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!DograhClient.isConfigured()) {
+    return NextResponse.json({ error: 'Calling provider is not configured.' }, { status: 503 });
+  }
+
+  try {
     const supabase = createServerClient();
-    
-    const { data: campaigns, error: campaignError } = await supabase
-      .from('campaign_runs')
-      .select('*')
-      .eq('status', 'running');
 
-    if (campaignError) {
-      throw new Error('Failed to fetch running campaigns');
+    // Include queued and paused campaigns: results can arrive for calls that were
+    // already in flight when a campaign was paused.
+    const { data: campaigns, error } = await supabase
+      .from('campaign_runs')
+      .select('id, status, dograh_campaign_id')
+      .in('status', ['queued', 'running', 'paused'])
+      .not('dograh_campaign_id', 'is', null);
+
+    if (error) {
+      console.error('[cron:reconcile] failed to load campaigns', error);
+      return NextResponse.json({ error: 'Failed to load campaigns' }, { status: 500 });
     }
 
-    for (const campaign of campaigns || []) {
+    const totals = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
+
+    for (const campaign of campaigns ?? []) {
       try {
-        const runs = await dograh.getCampaignRuns(campaign.dograh_campaign_id, 1, 100);
-        let completedCount = 0;
-
-        for (const run of runs.runs || []) {
-          // Check if dograh_run_id exists
-          const { data: existingLog } = await supabase
-            .from('call_logs')
-            .select('id')
-            .eq('dograh_run_id', run.id)
-            .single();
-
-          if (!existingLog) {
-            // Reconcile logic - pseudo webhook payload
-            // Assuming Dograh run object has similar fields or we map them
-            const payload = {
-              run_id: run.id,
-              status: run.status,
-              phone_number: run.phone_number,
-              duration: run.duration,
-              recording_url: run.recording_url,
-              transcript_url: run.transcript_url,
-              gathered_context: run.gathered_context,
-              summary: run.summary,
-              metadata: run.metadata
-            } as any; // Cast as any or WebhookPayload depending on exact types
-
-            // Process like webhook
-            let leadId = payload.metadata?.lead_id;
-            let lead;
-
-            if (leadId) {
-              const { data } = await supabase.from('leads').select('*').eq('id', leadId).single();
-              lead = data;
-            } else if (payload.phone_number) {
-              const { data } = await supabase.from('leads').select('*').eq('phone', payload.phone_number).single();
-              lead = data;
-            }
-
-            if (lead) {
-              leadId = lead.id;
-              let score = 0;
-              const context = payload.gathered_context || {};
-              
-              if (context.interested === true || context.interested === 'true') score += 40;
-              if (context.budget_confirmed === true || context.budget_confirmed === 'true') score += 20;
-              if (context.visit_date) score += 20;
-              if (payload.status === 'completed') score += 10;
-              if (payload.duration && payload.duration > 0) score += 10;
-              score = Math.min(score, 100);
-
-              const qualification = score >= 60 ? 'qualified' : (score > 0 ? 'unqualified' : lead.qualification);
-
-              await supabase.from('call_logs').insert({
-                lead_id: leadId,
-                dograh_run_id: payload.run_id,
-                direction: 'outbound',
-                outcome: payload.status,
-                duration: payload.duration,
-                recording_url: payload.recording_url,
-                transcript_url: payload.transcript_url,
-                gathered_data: context
-              });
-
-              await supabase.from('leads').update({
-                status: 'called',
-                call_outcome: payload.status,
-                score,
-                qualification,
-                qual_data: context,
-                recording_url: payload.recording_url,
-                transcript_url: payload.transcript_url,
-                last_attempt_at: new Date().toISOString(),
-                notes: payload.summary || lead.notes
-              }).eq('id', leadId);
-            }
-          }
-
-          if (run.status === 'completed' || run.status === 'failed' || run.status === 'no_answer') {
-            completedCount++;
-          }
-        }
-        
-        // If dograh says campaign is completed, update our status
-        const progress = await dograh.getCampaignProgress(campaign.dograh_campaign_id);
-        if (progress.state === 'completed' || progress.state === 'finished') {
-           await supabase.from('campaign_runs').update({ status: 'completed' }).eq('id', campaign.id);
-        }
+        const stats = await reconcileCampaign(supabase, campaign);
+        for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += stats[key];
       } catch (err) {
-        console.error(`Error reconciling campaign ${campaign.id}:`, err);
+        console.error(`[cron:reconcile] campaign ${campaign.id} failed`, err);
+        totals.error += 1;
       }
     }
 
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error('Error POST /api/cron/reconcile:', error);
+    const releasedLeads = await releaseStuckLeads(supabase);
+
+    return NextResponse.json({
+      success: true,
+      campaigns_checked: campaigns?.length ?? 0,
+      ...totals,
+      released_stuck_leads: releasedLeads,
+    });
+  } catch (error) {
+    console.error('[cron:reconcile] unexpected', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
+
+export const GET = handler;
+export const POST = handler;

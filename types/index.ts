@@ -1,3 +1,11 @@
+export type LeadStatus =
+  | 'new'
+  | 'queued'
+  | 'called'
+  | 'retry_pending'
+  | 'no_answer'
+  | 'unreachable';
+
 export interface Lead {
   id: string; // uuid
   name: string | null;
@@ -5,7 +13,11 @@ export interface Lead {
   email: string | null;
   city: string | null;
   source: string | null;
-  status: 'new' | 'queued' | 'called';
+  /**
+   * `retry_pending` / `no_answer` / `unreachable` keep unanswered leads out of the
+   * "called" bucket so the retry sweep can still pick them up.
+   */
+  status: LeadStatus;
   score: number | null;
   qualification: string | null;
   qual_data: Record<string, any> | null;
@@ -19,6 +31,8 @@ export interface Lead {
   recording_url: string | null;
   transcript_url: string | null;
   created_at: string;
+  /** Used by the stuck-lead sweep to detect launches that never finished. */
+  updated_at?: string | null;
   last_attempt_at: string | null;
   follow_up_date: string | null;
 }
@@ -161,6 +175,8 @@ export interface LeadStats {
   qualified: number;
   not_qualified: number;
   new_leads: number;
+  queued: number;
+  retry_pending: number;
   called: number;
   site_visits: number;
   follow_ups: number;

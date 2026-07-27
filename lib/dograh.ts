@@ -1,16 +1,60 @@
 import type { DograhCampaignProgress, DograhCampaignResponse, DograhPresignedResponse, DograhRunRecord } from '@/types';
 
+/** Error thrown for any non-2xx response from Dograh, carrying the HTTP status. */
+export class DograhApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly body: string,
+    public readonly endpoint: string,
+  ) {
+    super(message);
+    this.name = 'DograhApiError';
+  }
+
+  /** 4xx (except 408/429) means the request itself is wrong - retrying will not help. */
+  get isClientError() {
+    return this.status >= 400 && this.status < 500 && this.status !== 408 && this.status !== 429;
+  }
+}
+
+/** Thrown when required Dograh env vars are missing, instead of silently sending an empty key. */
+export class DograhConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DograhConfigError';
+  }
+}
+
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+const DEFAULT_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const MAX_ATTEMPTS = 3;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class DograhClient {
-  private apiKey: string;
   private baseUrl: string;
 
   constructor() {
-    this.apiKey = process.env.DOGRAH_API_KEY || '';
-    this.baseUrl = process.env.DOGRAH_API_URL || 'https://app.dograh.com';
+    // Trailing slashes would produce `//api/v1/...` and 404 on some gateways.
+    this.baseUrl = (process.env.DOGRAH_API_URL || 'https://app.dograh.com').replace(/\/+$/, '');
+  }
 
-    if (!this.apiKey && process.env.NODE_ENV !== 'test') {
-      console.warn('DOGRAH_API_KEY is not set');
+  /**
+   * Resolved lazily rather than in the constructor so that importing this module
+   * never throws at build time - only actual API use requires credentials.
+   */
+  private get apiKey(): string {
+    const key = process.env.DOGRAH_API_KEY;
+    if (!key) {
+      throw new DograhConfigError(
+        'DOGRAH_API_KEY is not set. Add it to your environment variables to enable calling features.',
+      );
     }
+    return key;
   }
 
   private get headers() {
@@ -20,35 +64,106 @@ export class DograhClient {
     };
   }
 
-  async getPresignedUploadUrl(fileName: string, fileSize: number): Promise<DograhPresignedResponse> {
-    const res = await fetch(`${this.baseUrl}/api/v1/s3/presigned-upload-url`, {
-      method: 'POST',
-      headers: this.headers,
-      body: JSON.stringify({
-        file_name: fileName,
-        file_size: fileSize,
-        content_type: 'text/csv'
-      })
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to get presigned URL: ${res.status} ${await res.text()}`);
+  /**
+   * Single place for fetch: enforces a timeout (otherwise a hung Dograh request
+   * would hang the serverless function until the platform kills it) and retries
+   * transient failures with exponential backoff.
+   */
+  private async request<T>(
+    path: string,
+    init: RequestInit & { timeoutMs?: number; idempotencyKey?: string } = {},
+  ): Promise<T> {
+    const { timeoutMs = DEFAULT_TIMEOUT_MS, idempotencyKey, ...rest } = init;
+    const url = `${this.baseUrl}${path}`;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const res = await fetch(url, {
+          ...rest,
+          headers: {
+            ...this.headers,
+            // Lets Dograh de-duplicate if our retry lands after their side succeeded.
+            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+            ...(rest.headers as Record<string, string> | undefined),
+          },
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          const err = new DograhApiError(
+            `Dograh ${path} failed: ${res.status} ${body.slice(0, 300)}`,
+            res.status,
+            body,
+            path,
+          );
+          // Bad request / auth / not found: fail immediately, do not burn retries.
+          if (!RETRYABLE_STATUS.has(res.status)) throw err;
+          lastError = err;
+        } else {
+          // 204 and empty bodies are valid for start/pause/resume.
+          if (res.status === 204) return undefined as T;
+          const text = await res.text();
+          return (text ? JSON.parse(text) : undefined) as T;
+        }
+      } catch (error) {
+        if (error instanceof DograhApiError && !RETRYABLE_STATUS.has(error.status)) throw error;
+        if (error instanceof DograhConfigError) throw error;
+        lastError =
+          error instanceof Error && error.name === 'AbortError'
+            ? new Error(`Dograh ${path} timed out after ${timeoutMs}ms`)
+            : error;
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(2 ** (attempt - 1) * 500 + Math.random() * 250);
+      }
     }
-    
-    return res.json() as Promise<DograhPresignedResponse>;
+
+    throw lastError instanceof Error ? lastError : new Error(`Dograh ${path} failed after ${MAX_ATTEMPTS} attempts`);
   }
 
-  async uploadCsvToS3(uploadUrl: string, csvContent: string): Promise<void> {
-    const res = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'text/csv'
-      },
-      body: csvContent
+  /** True when credentials are configured, so routes can return a clean 503 instead of crashing. */
+  static isConfigured(): boolean {
+    return Boolean(process.env.DOGRAH_API_KEY);
+  }
+
+  async getPresignedUploadUrl(fileName: string, fileSize: number): Promise<DograhPresignedResponse> {
+    return this.request<DograhPresignedResponse>('/api/v1/s3/presigned-upload-url', {
+      method: 'POST',
+      body: JSON.stringify({ file_name: fileName, file_size: fileSize, content_type: 'text/csv' }),
     });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to upload CSV to S3: ${res.status} ${await res.text()}`);
+  }
+
+  /** S3 presigned PUT: must NOT carry the Dograh API key or the signature check fails. */
+  async uploadCsvToS3(uploadUrl: string, csvContent: string): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+    try {
+      const res = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/csv' },
+        body: csvContent,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new DograhApiError(
+          `Failed to upload CSV to S3: ${res.status} ${body.slice(0, 300)}`,
+          res.status,
+          body,
+          's3-upload',
+        );
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -60,105 +175,72 @@ export class DograhClient {
     retry_config?: Record<string, any>;
     schedule_config?: Record<string, any>;
     circuit_breaker?: Record<string, any>;
+    idempotencyKey?: string;
   }): Promise<DograhCampaignResponse> {
-    const payload = {
-      ...params,
-      source_type: 'csv'
-    };
-
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign/create`, {
+    const { idempotencyKey, ...body } = params;
+    return this.request<DograhCampaignResponse>('/api/v1/campaign/create', {
       method: 'POST',
-      headers: this.headers,
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ ...body, source_type: 'csv' }),
+      idempotencyKey,
     });
-
-    if (!res.ok) {
-      throw new Error(`Failed to create campaign: ${res.status} ${await res.text()}`);
-    }
-
-    return res.json() as Promise<DograhCampaignResponse>;
   }
 
+  /** Starts a NOT_STARTED campaign. For a paused campaign use resumeCampaign(). */
   async startCampaign(campaignId: number): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign/${campaignId}/start`, {
+    await this.request<void>(`/api/v1/campaign/${campaignId}/start`, {
       method: 'POST',
-      headers: this.headers
+      idempotencyKey: `start-${campaignId}`,
     });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to start campaign ${campaignId}: ${res.status} ${await res.text()}`);
-    }
   }
 
   async pauseCampaign(campaignId: number): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign/${campaignId}/pause`, {
+    await this.request<void>(`/api/v1/campaign/${campaignId}/pause`, {
       method: 'POST',
-      headers: this.headers
+      idempotencyKey: `pause-${campaignId}`,
     });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to pause campaign ${campaignId}: ${res.status} ${await res.text()}`);
-    }
   }
 
+  /**
+   * Resumes a paused campaign via the dedicated endpoint.
+   *
+   * This previously delegated to startCampaign(), which restarts a campaign from
+   * the beginning and re-dials leads that were already called. /resume continues
+   * from where the campaign was paused.
+   */
   async resumeCampaign(campaignId: number): Promise<void> {
-    return this.startCampaign(campaignId);
+    await this.request<void>(`/api/v1/campaign/${campaignId}/resume`, {
+      method: 'POST',
+      idempotencyKey: `resume-${campaignId}`,
+    });
   }
 
   async getCampaignProgress(campaignId: number): Promise<DograhCampaignProgress> {
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign/${campaignId}/progress`, {
-      method: 'GET',
-      headers: this.headers
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to get campaign progress ${campaignId}: ${res.status} ${await res.text()}`);
-    }
-    
-    return res.json() as Promise<DograhCampaignProgress>;
+    return this.request<DograhCampaignProgress>(`/api/v1/campaign/${campaignId}/progress`);
   }
 
-  async getCampaignRuns(campaignId: number, page: number = 1, limit: number = 50): Promise<{ runs: DograhRunRecord[], total: number }> {
-    const url = new URL(`${this.baseUrl}/api/v1/campaign/${campaignId}/runs`);
-    url.searchParams.append('page', page.toString());
-    url.searchParams.append('limit', limit.toString());
-
-    const res = await fetch(url.toString(), {
-      method: 'GET',
-      headers: this.headers
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to get campaign runs ${campaignId}: ${res.status} ${await res.text()}`);
-    }
-    
-    return res.json() as Promise<{ runs: DograhRunRecord[], total: number }>;
+  async getCampaignRuns(
+    campaignId: number,
+    page = 1,
+    limit = 50,
+  ): Promise<{ runs: DograhRunRecord[]; total: number }> {
+    const qs = new URLSearchParams({ page: String(page), limit: String(limit) });
+    const data = await this.request<{ runs?: DograhRunRecord[]; total?: number }>(
+      `/api/v1/campaign/${campaignId}/runs?${qs}`,
+    );
+    // Normalise: some responses omit these keys entirely, which broke `.runs.map(...)`.
+    return { runs: data?.runs ?? [], total: data?.total ?? 0 };
   }
 
   async getCampaign(campaignId: number): Promise<DograhCampaignResponse> {
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign/${campaignId}`, {
-      method: 'GET',
-      headers: this.headers
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to get campaign ${campaignId}: ${res.status} ${await res.text()}`);
-    }
-    
-    return res.json() as Promise<DograhCampaignResponse>;
+    return this.request<DograhCampaignResponse>(`/api/v1/campaign/${campaignId}`);
   }
 
   async listCampaigns(): Promise<DograhCampaignResponse[]> {
-    const res = await fetch(`${this.baseUrl}/api/v1/campaign`, {
-      method: 'GET',
-      headers: this.headers
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Failed to list campaigns: ${res.status} ${await res.text()}`);
-    }
-    
-    return res.json() as Promise<DograhCampaignResponse[]>;
+    const data = await this.request<DograhCampaignResponse[] | { campaigns?: DograhCampaignResponse[] }>(
+      '/api/v1/campaign',
+    );
+    if (Array.isArray(data)) return data;
+    return data?.campaigns ?? [];
   }
 }
 
