@@ -11,24 +11,23 @@ const FALLBACK_IMPORT_WEBHOOK_URL = 'https://agent.bswealthfinance.com/webhook/l
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    if (!file) {
-      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    const contentType = request.headers.get('content-type') || '';
+    if (!contentType.includes('multipart/form-data')) {
+      return NextResponse.json({ error: 'Expected multipart/form-data with a file field' }, { status: 400 });
     }
+
+    // Forward the raw multipart body untouched (same bytes, same boundary) instead
+    // of re-parsing into FormData and rebuilding it — reconstructing a File/Blob
+    // from an already-parsed request body hit Node's "Body has already been read"
+    // bug. Passing the raw bytes straight through sidesteps that entirely.
+    const bodyBuffer = await request.arrayBuffer();
 
     const webhookUrl = process.env.N8N_IMPORT_WEBHOOK_URL || FALLBACK_IMPORT_WEBHOOK_URL;
 
-    // Re-wrap as a fresh Blob: the File from request.formData() is backed by a
-    // single-use stream, so handing it straight to a new FormData/fetch fails
-    // with "Body has already been read" once undici tries to read it again.
-    const fileBuffer = await file.arrayBuffer();
-    const forward = new FormData();
-    forward.set('file', new Blob([fileBuffer], { type: file.type }), file.name);
-
     const response = await fetch(webhookUrl, {
       method: 'POST',
-      body: forward,
+      headers: { 'content-type': contentType },
+      body: bodyBuffer,
     });
 
     let data: unknown = null;
