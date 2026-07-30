@@ -41,7 +41,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-[var(--background)]">
       <div className="w-full max-w-md p-8 space-y-8 bg-[#1e2330] rounded-xl shadow-2xl border border-white/5">
         <div className="text-center">
-          <h1 className="text-3xl font-bold text-white tracking-tight">SREECRM</h1>
+          <h1 className="text-3xl font-bold text-white tracking-tight">AI Voice Agent</h1>
           <p className="mt-2 text-sm text-gray-400">Sign in to your account to continue</p>
         </div>
 

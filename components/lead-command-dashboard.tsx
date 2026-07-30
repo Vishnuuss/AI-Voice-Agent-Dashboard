@@ -945,7 +945,7 @@ function AIAgentPage() {
   const [agentEnabled, setAgentEnabled] = useState(true)
   const [language, setLanguage] = useState("Telugu")
   const [voice, setVoice] = useState("Female — Natural")
-  const [greeting, setGreeting] = useState("Hello, this is the SREECRM AI assistant calling about your real estate inquiry. Am I speaking with {lead_name}?")
+  const [greeting, setGreeting] = useState("Hello, this is the AI Voice Agent calling about your loan inquiry. Am I speaking with {lead_name}?")
   const [maxRetries, setMaxRetries] = useState("3")
   const [callGap, setCallGap] = useState("30")
 
@@ -1046,8 +1046,8 @@ function AIAgentPage() {
 }
 
 function SettingsPage() {
-  const [companyName, setCompanyName] = useState("SREECRM")
-  const [projectName, setProjectName] = useState("Hyderabad project")
+  const [companyName, setCompanyName] = useState("AI Voice Agent")
+  const [projectName, setProjectName] = useState("Loan campaign")
   const [timezone, setTimezone] = useState("Asia/Kolkata")
   const [emailNotif, setEmailNotif] = useState(true)
   const [whatsappNotif, setWhatsappNotif] = useState(true)
@@ -1330,8 +1330,8 @@ export function LeadCommandDashboard() {
           <div className="flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"><Sparkles className="size-4" /></div>
             <div>
-              <p className="font-semibold tracking-tight">SREECRM</p>
-              <p className="text-xs text-muted-foreground">Real estate intelligence</p>
+              <p className="font-semibold tracking-tight">AI Voice Agent</p>
+              <p className="text-xs text-muted-foreground">Loan lead operations</p>
             </div>
           </div>
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(false)}><X /><span className="sr-only">Close menu</span></Button>

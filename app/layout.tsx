@@ -7,8 +7,8 @@ const geistSans = Geist({ subsets: ["latin"], variable: "--font-geist-sans" })
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" })
 
 export const metadata: Metadata = {
-  title: "SREECRM | AI Lead Operations",
-  description: "Real-time visibility into Telugu AI lead qualification, calls, follow-ups, and campaign performance.",
+  title: "AI Voice Agent | Loan Lead Operations",
+  description: "Real-time visibility into AI loan-lead qualification, calls, follow-ups, and campaign performance.",
 }
 
 export const viewport: Viewport = {
