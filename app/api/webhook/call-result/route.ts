@@ -18,6 +18,60 @@ import type { WebhookPayload } from '@/types';
 const MAX_RETRIES = 2;
 const MAX_NOTES_LENGTH = 2_000;
 
+/** Values a Jinja template produces for a variable that did not resolve. */
+const PLACEHOLDER_VALUES = new Set(['', 'none', 'null', 'undefined', 'nan', 'n/a', '{}', '[]']);
+
+/** "" / "None" / "Undefined" -> null; otherwise the trimmed string. */
+function cleanString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  return PLACEHOLDER_VALUES.has(s.toLowerCase()) ? null : s;
+}
+
+/** Accepts 6, "6" or "" and returns a number or null - never NaN. */
+function cleanNumber(value: unknown): number | null {
+  const s = cleanString(value);
+  if (s === null) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Jinja renders Python's True/False capitalised, and an unset variable as "".
+ * Anything unrecognised stays null so scoreCall() treats it as "no signal"
+ * rather than a definite "not interested".
+ */
+function cleanBoolean(value: unknown): boolean | null {
+  const s = cleanString(value);
+  if (s === null) return null;
+  const v = s.toLowerCase();
+  if (['true', 'yes', '1', 'interested', 'y'].includes(v)) return true;
+  if (['false', 'no', '0', 'not_interested', 'n'].includes(v)) return false;
+  return null;
+}
+
+function normaliseWebhookPayload(raw: Record<string, any>): WebhookPayload & Record<string, any> {
+  return {
+    ...raw,
+    run_id: cleanNumber(raw.run_id ?? raw.workflow_run_id ?? raw.call_id) as number,
+    campaign_id: cleanNumber(raw.campaign_id) as number,
+    lead_id: cleanString(raw.lead_id) as string,
+    phone: cleanString(raw.phone ?? raw.phone_number) as string,
+    customer_name: cleanString(raw.customer_name),
+    outcome: cleanString(raw.outcome) ?? 'completed',
+    interested: cleanBoolean(raw.interested),
+    budget: cleanString(raw.budget),
+    visit_date: cleanString(raw.visit_date),
+    notes: cleanString(raw.notes),
+    // Prefer the public URL variants - the plain ones require an authenticated
+    // session, so the dashboard cannot play them back for the client.
+    recording: cleanString(raw.recording_public_url ?? raw.recording ?? raw.recording_url),
+    transcript: cleanString(raw.transcript_public_url ?? raw.transcript ?? raw.transcript_url),
+    call_time: cleanString(raw.call_time) as string,
+    duration: cleanNumber(raw.duration ?? raw.call_duration_seconds) ?? 0,
+  };
+}
+
 /** Constant-time comparison so the secret cannot be recovered by timing the response. */
 function secretMatches(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -44,10 +98,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const payload = (await request.json().catch(() => null)) as WebhookPayload | null;
-    if (!payload || typeof payload !== 'object') {
+    const raw = (await request.json().catch(() => null)) as Record<string, any> | null;
+    if (!raw || typeof raw !== 'object') {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
+
+    // Dograh renders its payload from a Jinja template, which means every value
+    // arrives as a string and an unresolved variable arrives as "", "None" or
+    // "Undefined" rather than being omitted. Normalise before use so a missing
+    // recording does not get stored as the literal string "None", and so
+    // run_id survives as the number the bigint column and dedup check expect.
+    const payload = normaliseWebhookPayload(raw);
 
     const supabase = createServerClient();
     const runId = payload.run_id ?? null;
