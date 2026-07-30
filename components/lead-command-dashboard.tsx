@@ -5,6 +5,7 @@ import { useLeads, useLeadStats } from '@/hooks/use-leads'
 import { useCampaigns, useCampaignStats, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
 import { useCalls, useCallStats } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
+import { useOverview } from '@/hooks/use-reports'
 import {
   Activity,
   ArrowDownRight,
@@ -89,16 +90,6 @@ const systemNavItems = [
   { label: "Settings", icon: Settings },
 ]
 
-const chartData = [
-  { day: "Mon", calls: 38, qualified: 9 },
-  { day: "Tue", calls: 56, qualified: 14 },
-  { day: "Wed", calls: 47, qualified: 11 },
-  { day: "Thu", calls: 73, qualified: 22 },
-  { day: "Fri", calls: 68, qualified: 19 },
-  { day: "Sat", calls: 84, qualified: 26 },
-  { day: "Sun", calls: 76, qualified: 23 },
-]
-
 const chartConfig = {
   calls: { label: "Calls", color: "var(--chart-1)" },
   qualified: { label: "Qualified", color: "var(--chart-2)" },
@@ -176,6 +167,7 @@ function OverviewPage({
   exportReport,
   leadStats,
   callStats,
+  chartData,
 }: {
   range: string
   setRange: (v: string) => void
@@ -190,6 +182,7 @@ function OverviewPage({
   exportReport: () => void
   leadStats: any
   callStats: any
+  chartData: { day: string; calls: number; qualified: number }[]
 }) {
   const totalLeads = leadStats?.total ?? 0
   const qualifiedLeads = leadStats?.qualified ?? 0
@@ -1175,6 +1168,7 @@ export function LeadCommandDashboard() {
   const { stats: campaignStats } = useCampaignStats()
   const { calls: dbCalls, isLoading: callsLoading, refresh: refreshCalls } = useCalls('all')
   const { stats: callStats } = useCallStats()
+  const { data: chartData } = useOverview(range === '24h' ? 1 : range === '30d' ? 30 : 7)
 
   const visibleLeads = useMemo(() => {
     if (dbLeads && dbLeads.length > 0) {
@@ -1300,7 +1294,7 @@ export function LeadCommandDashboard() {
   const renderPage = () => {
     switch (activeNav) {
       case "Overview":
-        return <OverviewPage range={range} setRange={setRange} query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} setActiveNav={setActiveNav} exportReport={exportReport} leadStats={leadStats} callStats={callStats} />
+        return <OverviewPage range={range} setRange={setRange} query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} setActiveNav={setActiveNav} exportReport={exportReport} leadStats={leadStats} callStats={callStats} chartData={chartData} />
       case "Leads":
         return <LeadsPage query={query} statusFilter={statusFilter} visibleLeads={visibleLeads} setSelectedLead={setSelectedLead} filterOpen={filterOpen} setFilterOpen={setFilterOpen} setStatusFilter={setStatusFilter} totalCount={totalCount} leadPage={leadPage} setLeadPage={setLeadPage} totalPages={totalPages || 1} leadStats={leadStats} />
       case "Calls":
