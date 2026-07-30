@@ -19,8 +19,12 @@ export async function POST(request: Request) {
 
     const webhookUrl = process.env.N8N_IMPORT_WEBHOOK_URL || FALLBACK_IMPORT_WEBHOOK_URL;
 
+    // Re-wrap as a fresh Blob: the File from request.formData() is backed by a
+    // single-use stream, so handing it straight to a new FormData/fetch fails
+    // with "Body has already been read" once undici tries to read it again.
+    const fileBuffer = await file.arrayBuffer();
     const forward = new FormData();
-    forward.set('file', file, file.name);
+    forward.set('file', new Blob([fileBuffer], { type: file.type }), file.name);
 
     const response = await fetch(webhookUrl, {
       method: 'POST',
