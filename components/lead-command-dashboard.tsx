@@ -1492,16 +1492,43 @@ export function LeadCommandDashboard() {
               )}
 
               <div>
-                <h4 className="mb-3 font-medium">AI Call Transcript</h4>
+                <h4 className="mb-3 font-medium">Call recording &amp; transcript</h4>
                 <div className="flex flex-col gap-3 rounded-lg border bg-muted/10 p-4">
-                  {selectedLead.transcript.map((msg, i) => (
-                    <div key={i} className={`flex flex-col ${msg.speaker === "Agent" ? "items-start" : "items-end"}`}>
-                      <span className="mb-1 text-xs text-muted-foreground">{msg.speaker}</span>
-                      <div className={cn("max-w-[85%] rounded-lg px-3 py-2 text-sm", msg.speaker === "Agent" ? "bg-primary text-primary-foreground" : "bg-muted")}>
-                        {msg.text}
+                  {selectedLead.transcript.length > 0 ? (
+                    selectedLead.transcript.map((msg, i) => (
+                      <div key={i} className={`flex flex-col ${msg.speaker === "Agent" ? "items-start" : "items-end"}`}>
+                        <span className="mb-1 text-xs text-muted-foreground">{msg.speaker}</span>
+                        <div className={cn("max-w-[85%] rounded-lg px-3 py-2 text-sm", msg.speaker === "Agent" ? "bg-primary text-primary-foreground" : "bg-muted")}>
+                          {msg.text}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <>
+                      {(selectedLead as any).recording_url && (
+                        <audio controls preload="none" className="w-full" src={(selectedLead as any).recording_url} />
+                      )}
+                      {(selectedLead as any).transcript_url ? (
+                        <a
+                          href={(selectedLead as any).transcript_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-medium text-primary underline underline-offset-4"
+                        >
+                          Open full transcript
+                        </a>
+                      ) : (
+                        !(selectedLead as any).recording_url && (
+                          // An empty panel read as "broken". Say plainly that nothing has
+                          // arrived yet rather than rendering a blank box.
+                          <p className="text-sm text-muted-foreground">
+                            No call recorded for this lead yet. Recording and transcript appear here once a
+                            call completes.
+                          </p>
+                        )
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
