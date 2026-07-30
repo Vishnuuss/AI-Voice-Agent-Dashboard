@@ -729,34 +729,32 @@ function CampaignsPage({ setCampaignOpen, campaignsData, refreshCampaigns }: { s
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {runs.map((run: any, idx: number) => (
-                            {/* These rows come straight from Dograh's run records, which
-                                nest the number under initial_context and the length under
-                                cost_info, and report progress via is_completed rather than
-                                a `status` string. Reading the flat names showed every call
-                                as "unknown" with no phone or duration. */}
-                            {(() => {
-                              const phone = run.initial_context?.phone_number || run.phone_number || run.phone
-                              const seconds = run.cost_info?.call_duration_seconds ?? run.duration
-                              const state = run.status || (run.is_completed ? 'completed' : 'in progress')
-                              const answered = state === 'completed' || state === 'answered'
-                              const unanswered = ['no-answer', 'no_answer', 'unanswered', 'busy', 'failed'].includes(state)
-                              return (
-                                <TableRow key={run.id || idx}>
-                                  <TableCell className="font-mono text-sm">{phone || '—'}</TableCell>
-                                  <TableCell>
-                                    <Badge variant="outline" className={
-                                      answered ? 'bg-green-500/10 text-green-600 border-green-500/20' :
-                                      unanswered ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
-                                      'bg-muted text-muted-foreground'
-                                    }>{state}</Badge>
-                                  </TableCell>
-                                  <TableCell>{seconds ? `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}` : '—'}</TableCell>
-                                  <TableCell className="text-right text-sm text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</TableCell>
-                                </TableRow>
-                              )
-                            })()}
-                          ))}
+                          {runs.map((run: any, idx: number) => {
+                            // These rows come straight from Dograh's run records, which nest
+                            // the number under initial_context and the length under cost_info,
+                            // and report progress via is_completed rather than a `status`
+                            // string. Reading the flat names showed every call as "unknown"
+                            // with no phone and no duration.
+                            const phone = run.initial_context?.phone_number || run.phone_number || run.phone
+                            const seconds = run.cost_info?.call_duration_seconds ?? run.duration
+                            const state = run.status || (run.is_completed ? 'completed' : 'in progress')
+                            const answered = state === 'completed' || state === 'answered'
+                            const unanswered = ['no-answer', 'no_answer', 'unanswered', 'busy', 'failed'].includes(state)
+                            return (
+                              <TableRow key={run.id || idx}>
+                                <TableCell className="font-mono text-sm">{phone || '—'}</TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className={
+                                    answered ? 'bg-green-500/10 text-green-600 border-green-500/20' :
+                                    unanswered ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
+                                    'bg-muted text-muted-foreground'
+                                  }>{state}</Badge>
+                                </TableCell>
+                                <TableCell>{seconds ? `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}` : '—'}</TableCell>
+                                <TableCell className="text-right text-sm text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</TableCell>
+                              </TableRow>
+                            )
+                          })}
                         </TableBody>
                       </Table>
                     </div>
