@@ -575,8 +575,11 @@ function CallsPage({ calls, callStats }: { calls: any[]; callStats: any }) {
                   <TableCell><CallStatusIcon status={call.status || call.outcome} direction={call.direction || 'outbound'} /></TableCell>
                   <TableCell>
                     <div>
-                      <p className="font-medium">{call.lead || call.lead_name || 'Unknown'}</p>
-                      <p className="text-xs text-muted-foreground">{call.phone || call.lead_phone || ''}</p>
+                      {/* /api/calls joins the lead as `leads`, so the name lives at
+                          call.leads.name - the flat `lead`/`lead_name` fields this
+                          previously read never exist and every row showed "Unknown". */}
+                      <p className="font-medium">{call.leads?.name || call.lead || call.lead_name || 'Unknown'}</p>
+                      <p className="text-xs text-muted-foreground">{call.leads?.phone || call.phone || call.lead_phone || ''}</p>
                     </div>
                   </TableCell>
                   <TableCell><Badge variant="outline" className="capitalize">{call.direction || 'outbound'}</Badge></TableCell>
@@ -727,18 +730,32 @@ function CampaignsPage({ setCampaignOpen, campaignsData, refreshCampaigns }: { s
                         </TableHeader>
                         <TableBody>
                           {runs.map((run: any, idx: number) => (
-                            <TableRow key={run.id || idx}>
-                              <TableCell className="font-mono text-sm">{run.phone_number || run.phone || '—'}</TableCell>
-                              <TableCell>
-                                <Badge variant="outline" className={
-                                  run.status === 'completed' || run.status === 'answered' ? 'bg-green-500/10 text-green-600 border-green-500/20' :
-                                  run.status === 'no-answer' || run.status === 'no_answer' || run.status === 'unanswered' ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
-                                  'bg-red-500/10 text-red-500 border-red-500/20'
-                                }>{run.status || 'unknown'}</Badge>
-                              </TableCell>
-                              <TableCell>{run.duration ? `${Math.floor(run.duration / 60)}:${String(Math.round(run.duration % 60)).padStart(2, '0')}` : '—'}</TableCell>
-                              <TableCell className="text-right text-sm text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</TableCell>
-                            </TableRow>
+                            {/* These rows come straight from Dograh's run records, which
+                                nest the number under initial_context and the length under
+                                cost_info, and report progress via is_completed rather than
+                                a `status` string. Reading the flat names showed every call
+                                as "unknown" with no phone or duration. */}
+                            {(() => {
+                              const phone = run.initial_context?.phone_number || run.phone_number || run.phone
+                              const seconds = run.cost_info?.call_duration_seconds ?? run.duration
+                              const state = run.status || (run.is_completed ? 'completed' : 'in progress')
+                              const answered = state === 'completed' || state === 'answered'
+                              const unanswered = ['no-answer', 'no_answer', 'unanswered', 'busy', 'failed'].includes(state)
+                              return (
+                                <TableRow key={run.id || idx}>
+                                  <TableCell className="font-mono text-sm">{phone || '—'}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className={
+                                      answered ? 'bg-green-500/10 text-green-600 border-green-500/20' :
+                                      unanswered ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
+                                      'bg-muted text-muted-foreground'
+                                    }>{state}</Badge>
+                                  </TableCell>
+                                  <TableCell>{seconds ? `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}` : '—'}</TableCell>
+                                  <TableCell className="text-right text-sm text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</TableCell>
+                                </TableRow>
+                              )
+                            })()}
                           ))}
                         </TableBody>
                       </Table>
