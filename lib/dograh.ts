@@ -236,8 +236,10 @@ export class DograhClient {
   }
 
   async listCampaigns(): Promise<DograhCampaignResponse[]> {
+    // Trailing slash is required: Dograh serves the list at /api/v1/campaign/ and
+    // the unslashed path 404s instead of redirecting.
     const data = await this.request<DograhCampaignResponse[] | { campaigns?: DograhCampaignResponse[] }>(
-      '/api/v1/campaign',
+      '/api/v1/campaign/',
     );
     if (Array.isArray(data)) return data;
     return data?.campaigns ?? [];
