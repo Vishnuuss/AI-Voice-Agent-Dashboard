@@ -48,24 +48,23 @@ export function BsWealthLockup({
  */
 export function BsWealthLockupInline({ className }: { className?: string }) {
   return (
-    <div className={cn("flex flex-col leading-none select-none", className)}>
-      <div className="flex items-center gap-2.5">
-        <span className="font-display w-[0.9em] text-[30px] font-semibold leading-[0.8] tracking-tight text-primary">
-          B
-        </span>
-        <span className="text-[11px] font-semibold tracking-[0.26em] text-sidebar-foreground uppercase">
-          Wealth
-        </span>
-      </div>
-      <span className="my-1.5 h-px w-full max-w-[7.5rem] bg-border" aria-hidden />
-      <div className="flex items-center gap-2.5">
-        <span className="font-display w-[0.9em] text-[30px] font-semibold leading-[0.8] tracking-tight text-primary">
-          S
-        </span>
-        <span className="text-[11px] font-semibold tracking-[0.26em] text-sidebar-foreground uppercase">
-          Finance
-        </span>
-      </div>
+    <div className={cn("flex flex-col items-center leading-none select-none", className)}>
+      {/* Each initial sits directly above its own word, and the word's tracking
+          is tuned so the two blocks share the same optical width — that shared
+          measure is what makes a stacked lockup read as one mark instead of
+          four loose lines. */}
+      <span className="font-display text-[22px] font-semibold leading-none tracking-tight text-primary">
+        B
+      </span>
+      <span className="mt-1 text-[9px] font-semibold leading-none tracking-[0.2em] text-sidebar-foreground uppercase">
+        Wealth
+      </span>
+      <span className="font-display mt-2 text-[22px] font-semibold leading-none tracking-tight text-primary">
+        S
+      </span>
+      <span className="mt-1 text-[9px] font-semibold leading-none tracking-[0.2em] text-sidebar-foreground uppercase">
+        Finance
+      </span>
     </div>
   )
 }

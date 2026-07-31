@@ -3165,10 +3165,10 @@ export function LeadCommandDashboard() {
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-20 shrink-0 items-center justify-between border-b border-sidebar-border px-6">
+        <div className="relative flex h-28 shrink-0 items-center justify-center border-b border-sidebar-border px-6">
           <BsWealthLockupInline />
 
-          <Button variant="ghost" size="icon" className="lg:hidden text-sidebar-foreground hover:bg-sidebar-accent" onClick={() => setSidebarOpen(false)}>
+          <Button variant="ghost" size="icon" className="absolute right-3 top-3 lg:hidden text-sidebar-foreground hover:bg-sidebar-accent" onClick={() => setSidebarOpen(false)}>
             <X />
             <span className="sr-only">Close menu</span>
           </Button>
