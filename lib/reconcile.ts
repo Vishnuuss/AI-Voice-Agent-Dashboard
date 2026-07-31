@@ -4,6 +4,7 @@ import {
   buildGatheredContext,
   buildNoteLine,
   extractCallSignals,
+  hasQualificationSignal,
   parseFollowUpDate,
   usableMediaUrl,
 } from '@/lib/call-context';
@@ -122,7 +123,12 @@ export async function applyRunResult(
     notes: [lead.notes, noteLine].filter(Boolean).join('\n').slice(-MAX_NOTES_LENGTH),
   };
 
-  if (result.answered) {
+  // Same guard as the webhook: an answered-but-empty call must not overwrite the
+  // score a real conversation already produced.
+  const carriesSignal = hasQualificationSignal(signals);
+  const neverScored = lead.score === null || lead.score === undefined;
+
+  if (result.answered && (carriesSignal || neverScored)) {
     update.score = result.score;
     update.qualification = result.qualification;
     update.qual_data = gatheredContext;

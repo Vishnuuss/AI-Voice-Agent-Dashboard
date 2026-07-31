@@ -9,6 +9,7 @@ import {
   cleanString,
   extractCallSignals,
   flattenPayload,
+  hasQualificationSignal,
   parseFollowUpDate,
   usableMediaUrl,
 } from '@/lib/call-context';
@@ -215,9 +216,15 @@ export async function POST(request: Request) {
       notes,
     };
 
-    // Only overwrite scoring fields when the call actually produced signal, so a
-    // later unanswered retry cannot wipe a good score from an earlier conversation.
-    if (result.answered) {
+    // Only overwrite scoring fields when the call actually produced signal, so
+    // neither a later unanswered retry nor an answered-but-empty call (customer
+    // picks up and hangs up immediately) can wipe a good score from an earlier
+    // real conversation. A lead that has never been scored still gets its first
+    // score so nothing is left blank.
+    const carriesSignal = hasQualificationSignal(signals);
+    const neverScored = lead.score === null || lead.score === undefined;
+
+    if (result.answered && (carriesSignal || neverScored)) {
       update.score = result.score;
       update.qualification = result.qualification;
       update.qual_data = gatheredContext;

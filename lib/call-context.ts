@@ -204,6 +204,27 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
   };
 }
 
+/**
+ * True when the call actually told us something about the lead.
+ *
+ * A call can be "answered" and still carry no information - the customer picks up
+ * and hangs up after three seconds, so nothing is extracted. Without this check a
+ * throwaway second call overwrote a lead that an earlier real conversation had
+ * qualified (observed live: score 75 "qualified" replaced by 20 "not_qualified").
+ */
+export function hasQualificationSignal(signals: CallSignals): boolean {
+  return Boolean(
+    signals.interested !== null ||
+      signals.budget ||
+      signals.loan_type ||
+      signals.profession ||
+      signals.monthly_income ||
+      signals.existing_emi ||
+      signals.visit_date ||
+      signals.do_not_call !== null,
+  );
+}
+
 /** The jsonb blob we persist on call_logs.gathered_context and leads.qual_data. */
 export function buildGatheredContext(signals: CallSignals, outcome: string): Record<string, any> {
   const context: Record<string, any> = { call_outcome: outcome };
