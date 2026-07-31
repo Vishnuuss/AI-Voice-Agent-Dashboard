@@ -49,50 +49,66 @@
 }
 
 /*
- * BS Wealth — warm paper + ink + a single restrained orange.
+ * BS Wealth — warm paper + ink + orange.
  *
- * The accent is used sparingly and deliberately: active navigation, the one
- * primary CTA per view, focus rings, and the leading series in a chart. Every
- * other surface stays neutral warm-grey, which is what keeps this reading as
- * expensive rather than loud. Greys are all tinted to the same warm hue (~70)
- * so nothing goes cool-and-clinical against the paper base.
+ * Balanced on the 60/30/10 rule: roughly 60% paper white, 30% warm neutral
+ * (borders, muted surfaces, secondary text), 10-15% orange. The orange is the
+ * only chromatic colour in the product, which is what lets it carry weight
+ * without shouting — the moment a second accent appears, both stop meaning
+ * anything.
+ *
+ * Colour psychology, deliberately: orange reads as warmth, energy and
+ * approachability. For a lender that is the correct register — it says
+ * "a person will help you" rather than the cold institutional blue every
+ * bank defaults to. But orange saturates fast and tips into cheap/discount
+ * territory if it covers area, so it is applied to *marks* (type, icons,
+ * rules, small fills) and never to large planes. White keeps the surface;
+ * orange directs the eye.
+ *
+ * Every grey is tinted to the same warm hue (~70) so nothing reads
+ * cool-and-clinical against the paper.
  */
 :root {
   color-scheme: light;
-  --background: oklch(0.986 0.005 76);
-  --foreground: oklch(0.215 0.012 54);
+  --background: oklch(0.985 0.007 74);
+  --foreground: oklch(0.205 0.014 52);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.215 0.012 54);
+  --card-foreground: oklch(0.205 0.014 52);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.215 0.012 54);
-  --primary: oklch(0.615 0.163 47);
+  --popover-foreground: oklch(0.205 0.014 52);
+  --primary: oklch(0.598 0.184 44);
   --primary-foreground: oklch(0.995 0.003 76);
-  --secondary: oklch(0.963 0.007 76);
-  --secondary-foreground: oklch(0.285 0.014 54);
-  --muted: oklch(0.965 0.006 76);
-  --muted-foreground: oklch(0.522 0.014 58);
-  --accent: oklch(0.955 0.028 58);
-  --accent-foreground: oklch(0.43 0.135 47);
+  --secondary: oklch(0.958 0.012 72);
+  --secondary-foreground: oklch(0.275 0.016 52);
+  --muted: oklch(0.962 0.009 74);
+  --muted-foreground: oklch(0.505 0.019 56);
+  /* Accent is a genuine orange wash, not a barely-there tint — it carries the
+     active navigation state and every stat icon, so it needs to register. */
+  --accent: oklch(0.935 0.052 62);
+  --accent-foreground: oklch(0.415 0.155 44);
   --destructive: oklch(0.552 0.185 27);
-  --border: oklch(0.915 0.006 72);
-  --input: oklch(0.912 0.007 72);
-  --ring: oklch(0.615 0.163 47);
-  --chart-1: oklch(0.615 0.163 47);
-  --chart-2: oklch(0.735 0.098 62);
-  --chart-3: oklch(0.44 0.045 55);
-  --chart-4: oklch(0.685 0.055 92);
-  --chart-5: oklch(0.565 0.02 60);
+  --border: oklch(0.905 0.011 70);
+  --input: oklch(0.902 0.012 70);
+  --ring: oklch(0.598 0.184 44);
+  /* Chart ramp runs through the orange family rather than reaching for
+     unrelated hues — a single-hue ramp keeps multi-series charts legible and
+     on-brand at the same time. */
+  --chart-1: oklch(0.598 0.184 44);
+  --chart-2: oklch(0.735 0.125 62);
+  --chart-3: oklch(0.45 0.075 40);
+  --chart-4: oklch(0.825 0.075 78);
+  --chart-5: oklch(0.565 0.028 58);
   --radius: 0.6rem;
   /* Single shared easing curve for the whole product (expo-out). */
   --ease-brand: cubic-bezier(0.16, 1, 0.3, 1);
-  --sidebar: oklch(0.971 0.007 74);
-  --sidebar-foreground: oklch(0.265 0.012 54);
-  --sidebar-primary: oklch(0.615 0.163 47);
+  --sidebar: oklch(0.972 0.011 72);
+  --sidebar-foreground: oklch(0.255 0.014 52);
+  --sidebar-primary: oklch(0.598 0.184 44);
   --sidebar-primary-foreground: oklch(0.995 0.003 76);
-  --sidebar-accent: oklch(0.945 0.025 58);
-  --sidebar-accent-foreground: oklch(0.425 0.14 47);
-  --sidebar-border: oklch(0.902 0.007 72);
-  --sidebar-ring: oklch(0.615 0.163 47);
+  --sidebar-accent: oklch(0.925 0.062 60);
+  --sidebar-accent-foreground: oklch(0.4 0.165 44);
+  --sidebar-border: oklch(0.898 0.013 70);
+  --sidebar-ring: oklch(0.598 0.184 44);
 }
 
 /*
@@ -286,20 +302,49 @@
     z-index: 0;
   }
   .ambient-wash::before {
-    width: 30rem;
-    height: 30rem;
-    top: -14rem;
+    width: 34rem;
+    height: 34rem;
+    top: -15rem;
     right: -8rem;
-    background: color-mix(in oklch, var(--primary), transparent 86%);
+    background: color-mix(in oklch, var(--primary), transparent 76%);
     animation: drift-a 28s ease-in-out infinite;
   }
   .ambient-wash::after {
-    width: 24rem;
-    height: 24rem;
+    width: 26rem;
+    height: 26rem;
     bottom: -14rem;
-    left: 20%;
-    background: color-mix(in oklch, var(--chart-2), transparent 89%);
+    left: 18%;
+    background: color-mix(in oklch, var(--chart-2), transparent 80%);
     animation: drift-b 34s ease-in-out infinite;
+  }
+
+  /* A hairline orange rule that introduces a section — cheap way to spend
+     accent colour on structure rather than on filled area. */
+  .rule-accent::before {
+    content: '';
+    display: block;
+    width: 2.25rem;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--primary);
+    margin-bottom: 0.875rem;
+  }
+  /* Top-edge accent for the one card per view that matters most. */
+  .card-accent {
+    position: relative;
+  }
+  .card-accent::before {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 2px;
+    background: linear-gradient(
+      90deg,
+      var(--primary),
+      color-mix(in oklch, var(--primary), transparent 65%)
+    );
+    z-index: 1;
   }
   @keyframes drift-a {
     0%, 100% { transform: translate(0, 0) scale(1); }
@@ -336,6 +381,11 @@
   @keyframes sweep {
     from { transform: scaleX(0); }
     to { transform: scaleX(1); }
+  }
+
+  /* Skeleton shimmer sweep. */
+  @keyframes shimmer {
+    100% { transform: translateX(100%); }
   }
 
   /* Live indicator — a slow breathing pulse, not a blink. */

@@ -34,21 +34,38 @@ export function BsWealthLockup({
 }
 
 /**
- * Left-aligned sidebar variant: "BS" set large in the Didone, with the full
- * descriptor letterspaced beneath it. Same stacked hierarchy as the primary
- * lockup, ranged left so it sits on the sidebar's padding edge rather than
- * floating centred in the rail.
+ * The primary lockup: the two monogram letters stacked in a column, each
+ * paired on its own baseline with the word it stands for.
+ *
+ *     B  WEALTH
+ *     S  FINANCE
+ *
+ * The initials are set large in the Didone and optically aligned to the
+ * descriptor's cap-height, with a hairline rule separating the two rows so the
+ * pairing reads as deliberate rather than as two loose lines of type. This is
+ * the classic institutional monogram arrangement — it earns its authority from
+ * strict alignment, so the column widths are fixed rather than content-sized.
  */
 export function BsWealthLockupInline({ className }: { className?: string }) {
   return (
     <div className={cn("flex flex-col leading-none select-none", className)}>
-      <span className="font-display text-[26px] font-semibold tracking-tight text-sidebar-foreground">
-        BS
-      </span>
-      <span className="mt-1.5 h-px w-7 bg-primary/70" aria-hidden />
-      <span className="mt-1.5 text-[9px] font-semibold tracking-[0.24em] text-muted-foreground uppercase">
-        Wealth Finance
-      </span>
+      <div className="flex items-center gap-2.5">
+        <span className="font-display w-[0.9em] text-[30px] font-semibold leading-[0.8] tracking-tight text-primary">
+          B
+        </span>
+        <span className="text-[11px] font-semibold tracking-[0.26em] text-sidebar-foreground uppercase">
+          Wealth
+        </span>
+      </div>
+      <span className="my-1.5 h-px w-full max-w-[7.5rem] bg-border" aria-hidden />
+      <div className="flex items-center gap-2.5">
+        <span className="font-display w-[0.9em] text-[30px] font-semibold leading-[0.8] tracking-tight text-primary">
+          S
+        </span>
+        <span className="text-[11px] font-semibold tracking-[0.26em] text-sidebar-foreground uppercase">
+          Finance
+        </span>
+      </div>
     </div>
   )
 }

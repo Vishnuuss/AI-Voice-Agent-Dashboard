@@ -61,8 +61,8 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Sheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -70,6 +70,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { createBrowserClient } from "@/lib/supabase-browser"
 import { BsWealthLockupInline } from "@/components/brand/bs-wealth-mark"
+import { IntroSequence } from "@/components/motion/intro-sequence"
+import { Skeleton, StatSkeletonRow } from "@/components/motion/primitives"
 
 // ─── CONSTANTS & HELPERS ───────────────────────────────
 
@@ -485,6 +487,11 @@ function OverviewPage({
         </Card>
       )}
 
+      {/* Skeletons shaped like the cards they stand in for, so the swap when
+          data lands is a fade rather than the layout jumping into place. */}
+      {!leadStats && !callStats ? (
+        <StatSkeletonRow />
+      ) : (
       <section className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatFigure icon={Users} value={totalLeads} label="Total leads" />
         <StatFigure
@@ -508,6 +515,7 @@ function OverviewPage({
           label="Avg. connected call"
         />
       </section>
+      )}
 
       <section className="grid gap-4 lg:grid-cols-[1.55fr_1fr]">
         <Card>
@@ -634,7 +642,7 @@ function OverviewPage({
                   <TableHead className="text-right">Last activity</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="stagger-rows">
                 {leads.length === 0 ? (
                   <EmptyRow colSpan={5}>No leads yet. Use “Import leads” to upload a CSV.</EmptyRow>
                 ) : (
@@ -775,7 +783,7 @@ function LeadsPage({
                 <TableHead className="text-right">Last activity</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="stagger-rows">
               {leads.length === 0 ? (
                 <EmptyRow colSpan={7}>
                   {isLoading ? "Loading leads…" : "No leads found. Upload a CSV to import leads."}
@@ -881,7 +889,7 @@ function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => v
                 <TableHead className="text-right">Time</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="stagger-rows">
               {calls.length === 0 ? (
                 <EmptyRow colSpan={7}>
                   {isLoading ? "Loading calls…" : "No calls recorded yet. Launch a campaign to start calling."}
@@ -1125,7 +1133,7 @@ function CampaignsPage({
         </Card>
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div className="stagger-rows flex flex-col gap-4">
         {campaignsData.length === 0 ? (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
@@ -1169,36 +1177,44 @@ function CampaignsPage({
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {canControl && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={pausingId === campaign.id}
-                          onClick={() => handleTogglePause(campaign)}
-                        >
-                          {pausingId === campaign.id ? (
-                            "Updating…"
-                          ) : status === "paused" ? (
-                            <>
-                              <Play data-icon="inline-start" />
-                              Resume
-                            </>
-                          ) : (
-                            <>
-                              <Pause data-icon="inline-start" />
-                              Pause
-                            </>
-                          )}
-                        </Button>
-                      )}
-                      {canControl && (
-                        <Button variant="ghost" size="sm" onClick={() => openSettings(campaign)}>
-                          <Settings data-icon="inline-start" />
-                          Settings
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="sm" onClick={() => handleToggleDetails(campaign)}>
+                    {/* Pause/Resume and Settings stay visible on a finished
+                        campaign, but disabled with the reason on hover. Hiding
+                        them entirely made the controls look missing rather than
+                        inapplicable — a finished campaign genuinely cannot be
+                        paused or reconfigured, and the UI should say so. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canControl || pausingId === campaign.id}
+                        title={canControl ? undefined : `This campaign has ${status}. Only running campaigns can be paused.`}
+                        onClick={() => handleTogglePause(campaign)}
+                      >
+                        {pausingId === campaign.id ? (
+                          "Updating…"
+                        ) : status === "paused" ? (
+                          <>
+                            <Play data-icon="inline-start" />
+                            Resume
+                          </>
+                        ) : (
+                          <>
+                            <Pause data-icon="inline-start" />
+                            Pause
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canControl}
+                        title={canControl ? undefined : `This campaign has ${status}. Its settings can no longer be changed.`}
+                        onClick={() => openSettings(campaign)}
+                      >
+                        <Settings data-icon="inline-start" />
+                        Settings
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => handleToggleDetails(campaign)}>
                         <Eye data-icon="inline-start" />
                         {isExpanded ? "Hide" : "Details"}
                       </Button>
@@ -1248,7 +1264,7 @@ function CampaignsPage({
                                 <TableHead className="text-right">Called at</TableHead>
                               </TableRow>
                             </TableHeader>
-                            <TableBody>
+                            <TableBody className="stagger-rows">
                               {runs.map((run: any, idx: number) => {
                                 // These rows come straight from Dograh's run records, which nest
                                 // the number under initial_context and the length under cost_info,
@@ -1328,7 +1344,7 @@ function CampaignsPage({
               {settingsCampaign?.campaign_name} — changes apply immediately, calls in progress are not interrupted.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <DialogBody className="grid gap-5">
             <div className="grid gap-2">
               <label className="text-sm font-medium" htmlFor="settings-concurrency">
                 Concurrency
@@ -1389,7 +1405,7 @@ function CampaignsPage({
                 ))}
               </div>
             </div>
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSettingsCampaign(null)}>
               Cancel
@@ -1480,7 +1496,7 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any) => void }) 
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="stagger-rows">
               {leads.length === 0 ? (
                 <EmptyRow colSpan={5}>
                   {isLoading
@@ -1795,7 +1811,7 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
                 <TableHead>How to fix</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="stagger-rows">
               {!quality || quality.issues.length === 0 ? (
                 <EmptyRow colSpan={4}>
                   {qualityLoading
@@ -1848,7 +1864,7 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
                 <TableHead className="text-right">Distribution</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="stagger-rows">
               {outcomeRows.length === 0 ? (
                 <EmptyRow colSpan={4}>No calls recorded yet.</EmptyRow>
               ) : (
@@ -2524,23 +2540,37 @@ function LeadDetailSheet({
 
   return (
     <Sheet open={!!leadId} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent className="w-full sm:max-w-lg">
+        {/* Identity lives in the header rather than being repeated below it —
+            the panel previously said "Lead Details" then the name, then the
+            name again on an avatar row, which is three headings for one record. */}
         <SheetHeader>
-          <SheetTitle>Lead Details</SheetTitle>
+          <SheetTitle>{lead?.name || (isLoading ? "Loading…" : "Lead details")}</SheetTitle>
           <SheetDescription>
-            {lead ? `${lead.name || "Unknown"} — ${lead.phone}` : isLoading ? "Loading…" : "No lead selected"}
+            {lead ? lead.phone : isLoading ? "Fetching record" : "No lead selected"}
           </SheetDescription>
         </SheetHeader>
 
+        <SheetBody className="flex flex-col gap-6">
+        {isLoading && !lead && (
+          <div className="flex flex-col gap-4">
+            <Skeleton className="h-16 w-full rounded-xl" />
+            <Skeleton className="h-9 w-full rounded-lg" />
+            <Skeleton className="h-24 w-full rounded-xl" />
+            <Skeleton className="h-24 w-full rounded-xl" />
+          </div>
+        )}
         {lead && (
-          <div className="mt-6 flex flex-col gap-6">
-            <div className="flex items-center gap-4">
-              <Avatar className="size-14">
-                <AvatarFallback className="text-lg">{initialsOf(lead.name)}</AvatarFallback>
+          <>
+            <div className="flex items-center gap-4 rounded-xl border border-border/70 bg-accent/40 p-4">
+              <Avatar className="size-14 ring-1 ring-primary/25">
+                <AvatarFallback className="bg-card text-lg font-semibold text-primary">
+                  {initialsOf(lead.name)}
+                </AvatarFallback>
               </Avatar>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold">{lead.name || "Unknown"}</h3>
-                <p className="text-sm text-muted-foreground">{lead.email || "No email"}</p>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold">{lead.name || "Unknown"}</p>
+                <p className="truncate text-sm text-muted-foreground">{lead.email || "No email on file"}</p>
               </div>
               <StatusBadge status={leadStatusLabel(lead)} />
             </div>
@@ -2776,8 +2806,9 @@ function LeadDetailSheet({
                 </div>
               )}
             </div>
-          </div>
+          </>
         )}
+        </SheetBody>
       </SheetContent>
     </Sheet>
   )
@@ -3118,6 +3149,7 @@ export function LeadCommandDashboard() {
 
   return (
     <div className="flex min-h-screen bg-background font-sans text-foreground">
+      <IntroSequence />
       {sidebarOpen && (
         <button
           aria-label="Close navigation"
@@ -3325,12 +3357,12 @@ export function LeadCommandDashboard() {
 
       {/* Notifications Sheet */}
       <Sheet open={notifOpen} onOpenChange={setNotifOpen}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+        <SheetContent className="w-full sm:max-w-md">
           <SheetHeader>
             <SheetTitle>Notifications</SheetTitle>
             <SheetDescription>{unreadCount} unread</SheetDescription>
           </SheetHeader>
-          <div className="mt-4">
+          <SheetBody>
             {unreadCount > 0 && (
               <Button
                 variant="ghost"
@@ -3378,7 +3410,7 @@ export function LeadCommandDashboard() {
                 })
               )}
             </div>
-          </div>
+          </SheetBody>
         </SheetContent>
       </Sheet>
 
@@ -3389,7 +3421,7 @@ export function LeadCommandDashboard() {
             <DialogTitle>Start AI Campaign</DialogTitle>
             <DialogDescription>Configure your AI agent to start calling leads.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <DialogBody className="grid gap-5">
             <div className="grid gap-2">
               <label className="text-sm font-medium" htmlFor="campaign-segment">
                 Who to call
@@ -3547,7 +3579,7 @@ export function LeadCommandDashboard() {
                 </div>
               </div>
             )}
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCampaignOpen(false)}>
               Cancel
