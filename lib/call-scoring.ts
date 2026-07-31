@@ -35,6 +35,11 @@ export function normaliseOutcome(raw: unknown): CallOutcome {
     case 'failed':
     case 'error':
     case 'rejected':
+    // Dograh reports a crashed call as `pipeline_error`. It used to fall through
+    // to the default and be recorded as a completed conversation, so broken calls
+    // were invisible in the dashboard and the lead was never retried.
+    case 'pipeline_error':
+    case 'pipeline_failure':
       return 'failed';
     // Dograh reports the outcome as `call_disposition`. A hangup by either side
     // means the call WAS answered, so it must not fall through to a retry state.
@@ -58,9 +63,16 @@ export function isAnswered(outcome: CallOutcome): boolean {
   return !UNANSWERED.includes(outcome);
 }
 
-/** Retry only makes sense for calls that were never actually answered. */
+/**
+ * Retry only makes sense for calls that never produced a conversation.
+ *
+ * `failed` is included because it covers our own breakages (a crashed pipeline,
+ * a provider error) as well as telephony faults - in none of those cases did the
+ * customer actually decline, so writing the lead off as unreachable after one
+ * attempt loses a perfectly good number. MAX_RETRIES still caps the attempts.
+ */
 export function isRetryable(outcome: CallOutcome): boolean {
-  return outcome === 'no_answer' || outcome === 'busy' || outcome === 'voicemail';
+  return outcome === 'no_answer' || outcome === 'busy' || outcome === 'voicemail' || outcome === 'failed';
 }
 
 function isMeaningful(value: unknown): boolean {
