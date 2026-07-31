@@ -371,7 +371,7 @@ function OverviewPage({
         </Card>
       )}
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card className="transition-shadow hover:shadow-elevate-lg">
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
@@ -649,7 +649,7 @@ function LeadsPage({
         </div>
       </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-2xl font-semibold">{leadStats?.total ?? 0}</p>
@@ -743,7 +743,7 @@ function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => v
         </div>
       </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
@@ -1013,7 +1013,7 @@ function CampaignsPage({
         </div>
       </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-2xl font-semibold">{activeCampaigns}</p>
@@ -2998,7 +2998,7 @@ export function LeadCommandDashboard() {
                 )}
               >
                 {active && (
-                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" aria-hidden />
+                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary duration-200 animate-in slide-in-from-left-1 fade-in" aria-hidden />
                 )}
                 <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
                 <span className="flex-1 text-left">{item.label}</span>
@@ -3026,7 +3026,7 @@ export function LeadCommandDashboard() {
                 )}
               >
                 {active && (
-                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" aria-hidden />
+                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary duration-200 animate-in slide-in-from-left-1 fade-in" aria-hidden />
                 )}
                 <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
                 {item.label}
@@ -3123,7 +3123,12 @@ export function LeadCommandDashboard() {
           </div>
         </header>
 
-        <div className="mx-auto flex max-w-screen-2xl flex-col gap-5 p-4 pb-24 md:p-6 lg:pb-6">{renderPage()}</div>
+        <div
+          key={activeNav}
+          className="mx-auto flex max-w-screen-2xl flex-col gap-5 p-4 pb-24 duration-300 animate-in fade-in slide-in-from-bottom-2 md:p-6 lg:pb-6"
+        >
+          {renderPage()}
+        </div>
       </main>
 
       {/* Mobile bottom tab bar — the off-canvas sidebar drawer stays available via
