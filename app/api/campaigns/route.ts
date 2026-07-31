@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase-server';
 import { DograhApiError, DograhClient, DograhConfigError, dograh } from '@/lib/dograh';
 import { buildCampaignCsv } from '@/lib/csv-builder';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
+import { applyLeadSegmentFilter, isValidLeadSegment, segmentNoEligibleLeadsMessage, type LeadSegment } from '@/lib/lead-segments';
 
 /** Statuses that mean "a launch for this name is already in flight". */
 const IN_FLIGHT = ['pending', 'queued', 'running', 'paused'];
@@ -81,6 +82,7 @@ export async function POST(request: Request) {
   // Tracked so the failure path knows exactly what to undo.
   let campaignRunId: string | null = null;
   let claimedLeadIds: string[] = [];
+  let priorLeadState = new Map<string, { status: string; follow_up_date: string | null }>();
   let dograhCampaignId: number | null = null;
   let campaignStarted = false;
 
@@ -98,6 +100,14 @@ export async function POST(request: Request) {
     if (typeof campaign_name !== 'string' || !campaign_name.trim()) {
       return NextResponse.json({ error: 'campaign_name is required' }, { status: 400 });
     }
+
+    // Which lead group to call - defaults to 'new' so existing callers (and any
+    // request that omits it) behave exactly as before this was added.
+    const rawSegment = body.lead_segment ?? 'new';
+    if (!isValidLeadSegment(rawSegment)) {
+      return NextResponse.json({ error: `lead_segment must be one of: new, retry_pending, follow_up, unreachable` }, { status: 400 });
+    }
+    const leadSegment = rawSegment as LeadSegment;
 
     const requestedCount = Number(lead_count);
     if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > MAX_LEADS_PER_CAMPAIGN) {
@@ -145,7 +155,9 @@ export async function POST(request: Request) {
         requested_count: requestedCount,
         concurrency: safeConcurrency,
         status: 'pending',
-        target_segment: target_segment ?? null,
+        // lead_segment recorded here too (not just implied by which leads got
+        // claimed) so a later campaign list can show what was actually targeted.
+        target_segment: { ...(target_segment ?? {}), lead_segment: leadSegment },
         retry_config: retry_config ?? {},
         schedule_config: schedule_config ?? {},
       })
@@ -159,18 +171,25 @@ export async function POST(request: Request) {
     campaignRunId = reserved.id;
 
     // --- Step 2: find candidate leads -------------------------------------
-    let query = supabase
-      .from('leads')
-      .select('id')
-      .eq('status', 'new')
-      .not('phone', 'is', null);
+    // status/follow_up_date are selected too (not just id) so a failed launch
+    // can restore each lead's exact prior state instead of guessing 'new' -
+    // a retry_pending or follow_up lead rolled back that way would silently
+    // lose its retry/callback history.
+    let query = applyLeadSegmentFilter(
+      supabase.from('leads').select('id, status, follow_up_date').not('phone', 'is', null),
+      leadSegment,
+    );
 
     if (target_segment?.city) query = query.eq('city', target_segment.city);
     if (target_segment?.property_type) query = query.eq('property_type', target_segment.property_type);
 
-    const { data: candidates, error: leadsError } = await query
-      .order('created_at', { ascending: true })
-      .limit(requestedCount);
+    // Most-overdue first for follow-ups; oldest-first otherwise, same as before.
+    query =
+      leadSegment === 'follow_up'
+        ? query.order('follow_up_date', { ascending: true })
+        : query.order('created_at', { ascending: true });
+
+    const { data: candidates, error: leadsError } = await query.limit(requestedCount);
 
     if (leadsError) {
       throw new Error(`Failed to fetch leads: ${leadsError.message}`);
@@ -178,22 +197,30 @@ export async function POST(request: Request) {
     if (!candidates || candidates.length === 0) {
       await supabase.from('campaign_runs').delete().eq('id', campaignRunId);
       campaignRunId = null;
-      return NextResponse.json({ error: 'No eligible leads found with status "new"' }, { status: 400 });
+      return NextResponse.json({ error: segmentNoEligibleLeadsMessage(leadSegment) }, { status: 400 });
     }
 
     // --- Step 3: atomically CLAIM the leads -------------------------------
-    // The `.eq('status','new')` filter makes this a compare-and-set: only rows still
-    // unclaimed are returned, so two concurrent launches can never dial the same lead.
-    // Previously leads were marked queued only at the very end, leaving a long race window.
-    const { data: claimed, error: claimError } = await supabase
-      .from('leads')
-      .update({ status: 'queued', campaign_run_id: campaignRunId })
-      .in(
-        'id',
-        candidates.map((l) => l.id),
-      )
-      .eq('status', 'new')
-      .select('id, name, phone, city, property_type, budget, email');
+    // Re-applying the segment filter at claim time (not just `.in('id', ...)`) is
+    // what makes this a compare-and-set: only rows that STILL satisfy the segment
+    // condition are updated, so two concurrent launches (including one targeting a
+    // different but overlapping segment) can never dial the same lead. Previously
+    // leads were marked queued only at the very end, leaving a long race window.
+    const claimUpdate: Record<string, any> = { status: 'queued', campaign_run_id: campaignRunId };
+    // The callback this lead was queued for is being acted on now; clear it so it
+    // does not keep showing as "due" once this campaign has called them.
+    if (leadSegment === 'follow_up') claimUpdate.follow_up_date = null;
+
+    const { data: claimed, error: claimError } = await applyLeadSegmentFilter(
+      supabase
+        .from('leads')
+        .update(claimUpdate)
+        .in(
+          'id',
+          candidates.map((l: any) => l.id),
+        ),
+      leadSegment,
+    ).select('id, name, phone, city, property_type, budget, email');
 
     if (claimError) {
       throw new Error(`Failed to claim leads: ${claimError.message}`);
@@ -206,7 +233,10 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    claimedLeadIds = claimed.map((l) => l.id);
+    claimedLeadIds = claimed.map((l: any) => l.id);
+    // Snapshot of what each claimed lead looked like before this launch, for an
+    // exact rollback if something fails before dialling starts.
+    priorLeadState = new Map(candidates.map((l: any) => [l.id, { status: l.status, follow_up_date: l.follow_up_date }]));
 
     // --- Step 4: build + upload the CSV of ACTUALLY claimed leads ---------
     const csvString = buildCampaignCsv(claimed);
@@ -305,13 +335,26 @@ export async function POST(request: Request) {
       );
     }
 
-    // Nothing was dialled: release the claimed leads and drop the reservation.
+    // Nothing was dialled: release the claimed leads back to EXACTLY the status
+    // they had before this launch. Forcing them all to 'new' - the old behaviour -
+    // would erase a retry_pending lead's place in the retry queue or silently
+    // drop a follow-up's callback date on a failed launch.
     if (claimedLeadIds.length > 0) {
-      const { error: rollbackError } = await supabase
-        .from('leads')
-        .update({ status: 'new', campaign_run_id: null })
-        .in('id', claimedLeadIds);
-      if (rollbackError) console.error('[campaigns:POST] lead rollback failed', rollbackError);
+      const idsByPriorState = new Map<string, string[]>();
+      for (const id of claimedLeadIds) {
+        const prior = priorLeadState.get(id) ?? { status: 'new', follow_up_date: null };
+        const key = JSON.stringify(prior);
+        if (!idsByPriorState.has(key)) idsByPriorState.set(key, []);
+        idsByPriorState.get(key)!.push(id);
+      }
+      for (const [key, ids] of idsByPriorState) {
+        const prior = JSON.parse(key) as { status: string; follow_up_date: string | null };
+        const { error: rollbackError } = await supabase
+          .from('leads')
+          .update({ status: prior.status, follow_up_date: prior.follow_up_date, campaign_run_id: null })
+          .in('id', ids);
+        if (rollbackError) console.error('[campaigns:POST] lead rollback failed', rollbackError);
+      }
     }
     if (campaignRunId) {
       await supabase

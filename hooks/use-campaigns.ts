@@ -1,6 +1,47 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CampaignRun, CampaignStats, DograhCampaignProgress } from '@/types';
+import type { LeadSegment } from '@/lib/lead-segments';
 import { DEFAULT_POLL_MS, useAutoRefresh, usePolling } from './use-polling';
+
+export interface LeadSegmentCount {
+  value: LeadSegment;
+  label: string;
+  description: string;
+  count: number;
+}
+
+/** Live counts behind the Start Campaign dialog's segment dropdown. */
+export function useLeadSegmentCounts(enabled = true) {
+  const [segments, setSegments] = useState<LeadSegmentCount[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const fetchSegments = useCallback(async () => {
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/campaigns/segments', { signal: abortController.signal });
+      if (!response.ok) throw new Error(`Failed to fetch lead segments: ${response.statusText}`);
+      const data = await response.json();
+      setSegments(data.segments || []);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') console.error('[useLeadSegmentCounts]', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    fetchSegments();
+    return () => abortControllerRef.current?.abort();
+  }, [enabled, fetchSegments]);
+
+  return { segments, isLoading, refresh: fetchSegments };
+}
 
 export function useCampaigns() {
   const [campaigns, setCampaigns] = useState<CampaignRun[]>([]);

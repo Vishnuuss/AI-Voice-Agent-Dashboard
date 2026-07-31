@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLeads, useLeadStats, useLead, updateLead, type LeadQuery } from '@/hooks/use-leads'
-import { useCampaigns, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
+import { useCampaigns, useLeadSegmentCounts, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
+import type { LeadSegment } from '@/lib/lead-segments'
 import { useCalls, useCallStats, useTranscript } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
 import { useHealth, useOverview, useQuality, useSources, useWeekly } from '@/hooks/use-reports'
@@ -2414,7 +2415,16 @@ export function LeadCommandDashboard() {
 
   const [newCampaignName, setNewCampaignName] = useState("")
   const [newCampaignLeadCount, setNewCampaignLeadCount] = useState("100")
+  const [newCampaignSegment, setNewCampaignSegment] = useState<LeadSegment>("new")
+  const { segments: leadSegments, refresh: refreshLeadSegments } = useLeadSegmentCounts(campaignOpen)
   const [isLaunching, setIsLaunching] = useState(false)
+
+  // Keep the lead-count field matched to whichever segment is picked, so it
+  // does not stay stuck at "100" when the selected segment only has 1 lead.
+  useEffect(() => {
+    const count = leadSegments.find((s) => s.value === newCampaignSegment)?.count
+    if (count !== undefined) setNewCampaignLeadCount(String(count))
+  }, [newCampaignSegment, leadSegments])
 
   const refreshAll = useCallback(() => {
     refreshLeads()
@@ -2511,7 +2521,7 @@ export function LeadCommandDashboard() {
     }
     if (isLaunching) return
 
-    const available = leadStats?.new_leads ?? 0
+    const available = leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0
     const requested = parseInt(newCampaignLeadCount, 10)
     if (!Number.isInteger(requested) || requested < 1) {
       toast.error("Enter how many leads to call (at least 1)")
@@ -2524,12 +2534,14 @@ export function LeadCommandDashboard() {
       const result: any = await launchCampaign({
         campaign_name: newCampaignName.trim(),
         lead_count: Math.min(requested, available),
+        lead_segment: newCampaignSegment,
         concurrency: 1,
       })
       toast.success(`Campaign launched! ${result?.leads_queued ?? result?.actual_count ?? 0} leads queued.`)
       setCampaignOpen(false)
       setNewCampaignName("")
       refreshAll()
+      refreshLeadSegments()
     } catch (err: any) {
       toast.error(err.message || "Failed to launch campaign")
     } finally {
@@ -2873,21 +2885,51 @@ export function LeadCommandDashboard() {
             <DialogDescription>Configure your AI agent to start calling leads.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <p className="text-sm font-medium">Available leads</p>
-              <p className="mt-1 text-2xl font-semibold">
-                {leadStats?.new_leads ?? 0}{" "}
-                <span className="text-sm font-normal text-muted-foreground">new leads ready to call</span>
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {leadStats?.total ?? 0} total · {leadStats?.called ?? 0} already called · {leadStats?.queued ?? 0} queued
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="campaign-segment">
+                Who to call
+              </label>
+              {/* Grounded in the real leads.status/follow_up_date columns, not a
+                  guessed list - see lib/lead-segments.ts. The count next to each
+                  option is live and is exactly what the launch will claim. */}
+              <select
+                id="campaign-segment"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={newCampaignSegment}
+                onChange={(e) => setNewCampaignSegment(e.target.value as LeadSegment)}
+              >
+                {leadSegments.length === 0 ? (
+                  <option value="new">New</option>
+                ) : (
+                  leadSegments.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label} ({s.count})
+                    </option>
+                  ))
+                )}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {leadSegments.find((s) => s.value === newCampaignSegment)?.description ?? ""}
               </p>
             </div>
-            {(leadStats?.new_leads ?? 0) === 0 && (
+
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-sm font-medium">Available in this segment</p>
+              <p className="mt-1 text-2xl font-semibold">
+                {leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0}{" "}
+                <span className="text-sm font-normal text-muted-foreground">leads ready to call</span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {leadStats?.total ?? 0} total leads · {leadStats?.queued ?? 0} currently queued in other campaigns
+              </p>
+            </div>
+            {(leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0) === 0 && (
               <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
-                <p className="text-sm font-medium text-destructive">No new leads available</p>
+                <p className="text-sm font-medium text-destructive">No leads in this segment</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Upload a CSV file first to import leads, then create a campaign.
+                  {newCampaignSegment === "new"
+                    ? "Upload a CSV file first to import leads, then create a campaign."
+                    : "Pick a different segment, or check back after more calls complete."}
                 </p>
               </div>
             )}
@@ -2916,11 +2958,13 @@ export function LeadCommandDashboard() {
                 id="campaign-count"
                 type="number"
                 min={1}
-                max={leadStats?.new_leads ?? 100}
+                max={leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 100}
                 value={newCampaignLeadCount}
                 onChange={(e) => setNewCampaignLeadCount(e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Max: {leadStats?.new_leads ?? 0} new leads</p>
+              <p className="text-xs text-muted-foreground">
+                Max: {leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0} leads in this segment
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -2929,11 +2973,18 @@ export function LeadCommandDashboard() {
             </Button>
             <Button
               onClick={handleLaunchCampaign}
-              disabled={!newCampaignName.trim() || isLaunching || (leadStats?.new_leads ?? 0) === 0}
+              disabled={
+                !newCampaignName.trim() ||
+                isLaunching ||
+                (leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0) === 0
+              }
             >
               {isLaunching
                 ? "Creating…"
-                : `Launch Campaign (${Math.min(parseInt(newCampaignLeadCount, 10) || 0, leadStats?.new_leads ?? 0)} leads)`}
+                : `Launch Campaign (${Math.min(
+                    parseInt(newCampaignLeadCount, 10) || 0,
+                    leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0,
+                  )} leads)`}
             </Button>
           </DialogFooter>
         </DialogContent>
