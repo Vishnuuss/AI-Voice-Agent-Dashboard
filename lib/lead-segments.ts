@@ -31,12 +31,24 @@ export function isValidLeadSegment(value: unknown): value is LeadSegment {
  *
  * `queued` is always excluded: a lead already locked into another campaign is
  * never eligible, regardless of segment.
+ *
+ * `retryGapMinutes` (the AI Agent page's "Gap between retries" setting) holds
+ * a retry_pending lead back from being re-selected until that many minutes
+ * have passed since its last attempt - callers that don't pass it get no gap.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function applyLeadSegmentFilter(query: any, segment: LeadSegment) {
+export function applyLeadSegmentFilter(query: any, segment: LeadSegment, retryGapMinutes = 0) {
   switch (segment) {
-    case 'retry_pending':
-      return query.eq('status', 'retry_pending');
+    case 'retry_pending': {
+      let q = query.eq('status', 'retry_pending');
+      if (retryGapMinutes > 0) {
+        const cutoff = new Date(Date.now() - retryGapMinutes * 60_000).toISOString();
+        // A lead with no last_attempt_at yet (should not happen for
+        // retry_pending, but defensively) is treated as already past the gap.
+        q = q.or(`last_attempt_at.is.null,last_attempt_at.lte.${cutoff}`);
+      }
+      return q;
+    }
     case 'follow_up':
       return query.not('follow_up_date', 'is', null).lte('follow_up_date', new Date().toISOString()).neq('status', 'queued');
     case 'unreachable':

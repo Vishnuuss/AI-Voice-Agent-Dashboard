@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { getCallBehaviorSettings } from '@/lib/call-behavior';
 import { applyLeadSegmentFilter, LEAD_SEGMENTS } from '@/lib/lead-segments';
 
 /**
@@ -12,12 +13,14 @@ import { applyLeadSegmentFilter, LEAD_SEGMENTS } from '@/lib/lead-segments';
 export async function GET() {
   try {
     const supabase = createServerClient();
+    const { callGapMinutes } = await getCallBehaviorSettings(supabase);
 
     const counts = await Promise.all(
       LEAD_SEGMENTS.map(async (segment) => {
         const { count, error } = await applyLeadSegmentFilter(
           supabase.from('leads').select('id', { count: 'exact', head: true }).not('phone', 'is', null),
           segment.value,
+          callGapMinutes,
         );
         if (error) {
           console.error('[campaigns/segments] count failed for', segment.value, error);

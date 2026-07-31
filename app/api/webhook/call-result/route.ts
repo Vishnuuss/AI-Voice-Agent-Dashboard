@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { createServerClient } from '@/lib/supabase-server';
+import { getMaxRetries } from '@/lib/call-behavior';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
   buildGatheredContext,
@@ -27,7 +28,6 @@ import {
  * the provider redeliver the same event indefinitely.
  */
 
-const MAX_RETRIES = 2;
 const MAX_NOTES_LENGTH = 2_000;
 
 /** Constant-time comparison so the secret cannot be recovered by timing the response. */
@@ -204,7 +204,8 @@ export async function POST(request: Request) {
     }
 
     // --- Update the lead --------------------------------------------------
-    const status = leadStatusFor(result.outcome, nextRetryCount, MAX_RETRIES);
+    const maxRetries = await getMaxRetries(supabase);
+    const status = leadStatusFor(result.outcome, nextRetryCount, maxRetries);
 
     // Append-only notes previously grew without bound across retries.
     const noteLine = buildNoteLine(signals, {

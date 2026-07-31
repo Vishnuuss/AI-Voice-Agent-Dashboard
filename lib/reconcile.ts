@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getMaxRetries } from '@/lib/call-behavior';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
   buildGatheredContext,
@@ -11,7 +12,6 @@ import {
 } from '@/lib/call-context';
 import type { DograhRunRecord } from '@/types';
 
-const MAX_RETRIES = 2;
 const MAX_NOTES_LENGTH = 2_000;
 
 /**
@@ -26,6 +26,9 @@ export async function applyRunResult(
   supabase: SupabaseClient,
   run: DograhRunRecord & Record<string, any>,
   campaignRunId?: string | null,
+  // Read once per sweep by the caller and threaded through, rather than
+  // re-querying settings for every run record in a large campaign.
+  maxRetries?: number,
 ): Promise<'inserted' | 'duplicate' | 'no_lead' | 'error'> {
   const runId = run.id;
   if (runId == null) return 'error';
@@ -122,7 +125,7 @@ export async function applyRunResult(
   });
 
   const update: Record<string, any> = {
-    status: leadStatusFor(result.outcome, nextRetryCount, MAX_RETRIES),
+    status: leadStatusFor(result.outcome, nextRetryCount, maxRetries ?? 2),
     call_outcome: result.outcome,
     last_attempt_at: calledAt,
     retry_count: nextRetryCount,

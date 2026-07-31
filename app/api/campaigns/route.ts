@@ -4,6 +4,7 @@ import { DograhApiError, DograhClient, DograhConfigError, dograh } from '@/lib/d
 import { buildCampaignCsv } from '@/lib/csv-builder';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
 import { applyLeadSegmentFilter, isValidLeadSegment, segmentNoEligibleLeadsMessage, type LeadSegment } from '@/lib/lead-segments';
+import { getCallBehaviorSettings } from '@/lib/call-behavior';
 
 /** Statuses that mean "a launch for this name is already in flight". */
 const IN_FLIGHT = ['pending', 'queued', 'running', 'paused'];
@@ -120,6 +121,30 @@ export async function POST(request: Request) {
     const name = campaign_name.trim();
     const safeConcurrency = Math.min(Math.max(Number(concurrency) || 1, 1), 100);
 
+    // Same bounds Dograh's own RetryConfigRequest enforces - checked here too
+    // so a bad value gets a clear 400 instead of an opaque provider rejection
+    // after the CSV has already been uploaded.
+    if (retry_config !== undefined && retry_config !== null) {
+      if (typeof retry_config !== 'object') {
+        return NextResponse.json({ error: 'retry_config must be an object' }, { status: 400 });
+      }
+      if (retry_config.max_retries !== undefined) {
+        const n = Number(retry_config.max_retries);
+        if (!Number.isInteger(n) || n < 0 || n > 10) {
+          return NextResponse.json({ error: 'retry_config.max_retries must be an integer between 0 and 10' }, { status: 400 });
+        }
+      }
+      if (retry_config.retry_delay_seconds !== undefined) {
+        const n = Number(retry_config.retry_delay_seconds);
+        if (!Number.isInteger(n) || n < 30 || n > 3600) {
+          return NextResponse.json(
+            { error: 'retry_config.retry_delay_seconds must be an integer between 30 and 3600' },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
     // --- Idempotency guard -------------------------------------------------
     // Without this, a double-clicked "Launch" button created two Dograh campaigns
     // over the same leads and dialled every person twice.
@@ -175,9 +200,11 @@ export async function POST(request: Request) {
     // can restore each lead's exact prior state instead of guessing 'new' -
     // a retry_pending or follow_up lead rolled back that way would silently
     // lose its retry/callback history.
+    const { callGapMinutes } = await getCallBehaviorSettings(supabase);
     let query = applyLeadSegmentFilter(
       supabase.from('leads').select('id, status, follow_up_date').not('phone', 'is', null),
       leadSegment,
+      callGapMinutes,
     );
 
     if (target_segment?.city) query = query.eq('city', target_segment.city);
@@ -220,6 +247,7 @@ export async function POST(request: Request) {
           candidates.map((l: any) => l.id),
         ),
       leadSegment,
+      callGapMinutes,
     ).select('id, name, phone, city, property_type, budget, email');
 
     if (claimError) {

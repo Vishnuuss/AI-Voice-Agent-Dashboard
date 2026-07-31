@@ -16,6 +16,7 @@ import {
   Calendar,
   CalendarClock,
   Check,
+  ChevronDown,
   CircleDollarSign,
   Clock3,
   Copy,
@@ -872,6 +873,78 @@ function CampaignsPage({
   const [pausingId, setPausingId] = useState<string | null>(null)
   const [campaignRuns, setCampaignRuns] = useState<Record<string, any[]>>({})
   const [loadingRuns, setLoadingRuns] = useState<string | null>(null)
+  const [settingsCampaign, setSettingsCampaign] = useState<any>(null)
+  const [settingsForm, setSettingsForm] = useState({
+    concurrency: "1",
+    maxRetries: "2",
+    retryDelaySeconds: "120",
+    retryOnBusy: true,
+    retryOnNoAnswer: true,
+    retryOnVoicemail: true,
+  })
+  const [savingSettings, setSavingSettings] = useState(false)
+
+  const openSettings = (campaign: any) => {
+    setSettingsCampaign(campaign)
+    setSettingsForm({
+      concurrency: String(campaign.concurrency || 1),
+      maxRetries: String(campaign.retry_config?.max_retries ?? 2),
+      retryDelaySeconds: String(campaign.retry_config?.retry_delay_seconds ?? 120),
+      // Dograh's PATCH replaces the whole retry_config object rather than
+      // merging it, so these have to round-trip through the form too -
+      // omitting them here would silently reset a campaign that had them
+      // turned off back to "retry on everything" the moment you changed
+      // anything else.
+      retryOnBusy: campaign.retry_config?.retry_on_busy ?? true,
+      retryOnNoAnswer: campaign.retry_config?.retry_on_no_answer ?? true,
+      retryOnVoicemail: campaign.retry_config?.retry_on_voicemail ?? true,
+    })
+  }
+
+  const handleSaveSettings = async () => {
+    if (!settingsCampaign) return
+    const concurrency = Number(settingsForm.concurrency)
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 100) {
+      toast.error("Concurrency must be a whole number between 1 and 100")
+      return
+    }
+    const maxRetries = Number(settingsForm.maxRetries)
+    if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 10) {
+      toast.error("Max retries must be a whole number between 0 and 10")
+      return
+    }
+    const retryDelaySeconds = Number(settingsForm.retryDelaySeconds)
+    if (!Number.isInteger(retryDelaySeconds) || retryDelaySeconds < 30 || retryDelaySeconds > 3600) {
+      toast.error("Retry delay must be a whole number of seconds between 30 and 3600")
+      return
+    }
+    setSavingSettings(true)
+    try {
+      const res = await fetch(`/api/campaigns/${settingsCampaign.id}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          concurrency,
+          retry_config: {
+            max_retries: maxRetries,
+            retry_delay_seconds: retryDelaySeconds,
+            retry_on_busy: settingsForm.retryOnBusy,
+            retry_on_no_answer: settingsForm.retryOnNoAnswer,
+            retry_on_voicemail: settingsForm.retryOnVoicemail,
+          },
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Failed to save settings (${res.status})`)
+      toast.success("Campaign settings updated")
+      setSettingsCampaign(null)
+      refreshCampaigns()
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save settings")
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   const handleTogglePause = async (campaign: any) => {
     if (pausingId) return
@@ -1034,6 +1107,12 @@ function CampaignsPage({
                           )}
                         </Button>
                       )}
+                      {canControl && (
+                        <Button variant="ghost" size="sm" onClick={() => openSettings(campaign)}>
+                          <Settings data-icon="inline-start" />
+                          Settings
+                        </Button>
+                      )}
                       <Button variant="ghost" size="sm" onClick={() => handleToggleDetails(campaign)}>
                         <Eye data-icon="inline-start" />
                         {isExpanded ? "Hide" : "Details"}
@@ -1153,6 +1232,89 @@ function CampaignsPage({
           })
         )}
       </div>
+
+      {/* Edit settings on a live campaign - Dograh accepts this on any campaign
+          that isn't completed/failed, so it works while queued/running/paused. */}
+      <Dialog open={!!settingsCampaign} onOpenChange={(open) => !open && setSettingsCampaign(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Campaign settings</DialogTitle>
+            <DialogDescription>
+              {settingsCampaign?.campaign_name} — changes apply immediately, calls in progress are not interrupted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="settings-concurrency">
+                Concurrency
+              </label>
+              <Input
+                id="settings-concurrency"
+                type="number"
+                min={1}
+                max={100}
+                value={settingsForm.concurrency}
+                onChange={(e) => setSettingsForm({ ...settingsForm, concurrency: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium" htmlFor="settings-max-retries">
+                  Max retries
+                </label>
+                <Input
+                  id="settings-max-retries"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={settingsForm.maxRetries}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, maxRetries: e.target.value })}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium" htmlFor="settings-retry-delay">
+                  Retry delay (sec)
+                </label>
+                <Input
+                  id="settings-retry-delay"
+                  type="number"
+                  min={30}
+                  max={3600}
+                  value={settingsForm.retryDelaySeconds}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, retryDelaySeconds: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <span className="text-sm font-medium">Retry on</span>
+              <div className="flex flex-col gap-1.5">
+                {[
+                  { key: "retryOnBusy" as const, label: "Busy" },
+                  { key: "retryOnNoAnswer" as const, label: "No answer" },
+                  { key: "retryOnVoicemail" as const, label: "Voicemail" },
+                ].map((opt) => (
+                  <label key={opt.key} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm[opt.key]}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, [opt.key]: e.target.checked })}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSettingsCampaign(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveSettings} disabled={savingSettings}>
+              {savingSettings ? "Saving…" : "Save settings"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
@@ -1592,12 +1754,18 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
   )
 }
 
+const PROMPT_BLOCKS: { key: "global" | "start" | "agenda" | "end"; label: string; hint: string }[] = [
+  { key: "global", label: "Global rules", hint: "Applied to every turn of the call — tone, language, what never to say." },
+  { key: "start", label: "Opening line", hint: "The first thing the agent says, and how it reacts to yes/no/busy." },
+  { key: "agenda", label: "Main questions", hint: "What the agent asks once the customer shows interest." },
+  { key: "end", label: "Closing line", hint: "The last thing the agent says before hanging up." },
+]
+
 function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any }) {
   const { settings, updateSetting, isLoading } = useSettings()
   const [form, setForm] = useState({
     language: "Telugu",
     voice: "Female — Natural",
-    greeting: "",
     maxRetries: "2",
     callGap: "30",
   })
@@ -1605,10 +1773,68 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
 
   // Hydrate from the database once the settings arrive, so a reload no longer
   // resets everything to the hard-coded defaults it used to display.
+  // maxRetries/callGap live under the separate "call_behavior" settings key
+  // (that's what the retry sweep actually reads) - hydrating only ai_agent
+  // meant a saved value here was never shown again after a reload.
   useEffect(() => {
-    const stored = settings?.ai_agent
-    if (stored) setForm((prev) => ({ ...prev, ...stored }))
+    setForm((prev) => ({
+      ...prev,
+      ...(settings?.ai_agent ?? {}),
+      ...(settings?.call_behavior?.maxRetries !== undefined ? { maxRetries: String(settings.call_behavior.maxRetries) } : {}),
+      ...(settings?.call_behavior?.callGapMinutes !== undefined
+        ? { callGap: String(settings.call_behavior.callGapMinutes) }
+        : {}),
+    }))
   }, [settings])
+
+  // --- Live agent prompts ---------------------------------------------------
+  // Previously "Opening greeting" saved to our own settings table and never
+  // touched the live agent at all - the button worked, it just didn't do what
+  // it looked like it did. This reads and writes the actual Dograh workflow.
+  const [prompts, setPrompts] = useState<Record<string, string>>({})
+  const [promptVersion, setPromptVersion] = useState<number | null>(null)
+  const [promptsLoading, setPromptsLoading] = useState(false)
+  const [promptsError, setPromptsError] = useState<string | null>(null)
+  const [savingPrompt, setSavingPrompt] = useState<string | null>(null)
+
+  const loadPrompts = useCallback(async () => {
+    setPromptsLoading(true)
+    setPromptsError(null)
+    try {
+      const res = await fetch("/api/agent/prompts")
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Failed to load agent prompts (${res.status})`)
+      setPrompts(data.prompts || {})
+      setPromptVersion(data.version ?? null)
+    } catch (err: any) {
+      setPromptsError(err.message || "Could not load the live agent prompts")
+    } finally {
+      setPromptsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadPrompts()
+  }, [loadPrompts])
+
+  const savePrompt = async (key: string) => {
+    setSavingPrompt(key)
+    try {
+      const res = await fetch("/api/agent/prompts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: prompts[key] }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Failed to save (${res.status})`)
+      setPromptVersion(data.version ?? promptVersion)
+      toast.success(`Saved and published (v${data.version ?? "?"})`)
+    } catch (err: any) {
+      toast.error(err.message || "Could not save the prompt")
+    } finally {
+      setSavingPrompt(null)
+    }
+  }
 
   const save = async (key: string, value: any, label: string) => {
     setSaving(key)
@@ -1708,48 +1934,83 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Opening greeting</CardTitle>
-          <CardDescription>
-            Reference copy of the agent&apos;s opening line. Use {"{lead_name}"} as a placeholder.
-          </CardDescription>
+        <CardHeader className="flex-row items-start justify-between">
+          <div>
+            <CardTitle>Agent script</CardTitle>
+            <CardDescription>
+              What Shreya actually says, live in Dograh. Saving publishes immediately — the next call uses the new
+              text.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            {promptVersion !== null && <Badge variant="outline">v{promptVersion}</Badge>}
+            <Button variant="ghost" size="sm" onClick={loadPrompts} disabled={promptsLoading}>
+              <RefreshCw data-icon="inline-start" className={cn(promptsLoading && "animate-spin")} />
+              Reload
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <textarea
-            className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            value={form.greeting}
-            placeholder="Hello, this is the AI Voice Agent calling about your loan inquiry. Am I speaking with {lead_name}?"
-            onChange={(e) => setForm({ ...form, greeting: e.target.value })}
-          />
-          <Button
-            size="sm"
-            className="self-end"
-            disabled={saving === "ai_agent"}
-            onClick={() => save("ai_agent", form, "Greeting")}
-          >
-            {saving === "ai_agent" ? "Saving…" : "Save greeting"}
-          </Button>
+        <CardContent className="flex flex-col gap-5">
+          {promptsError && (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
+              <p className="text-sm font-medium text-destructive">Could not load the live script</p>
+              <p className="mt-1 text-xs text-muted-foreground">{promptsError}</p>
+            </div>
+          )}
+          {promptsLoading && !promptsError && Object.keys(prompts).length === 0 ? (
+            <p className="text-sm text-muted-foreground">Loading the live script…</p>
+          ) : (
+            PROMPT_BLOCKS.map((block) => (
+              <div key={block.key} className="grid gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium" htmlFor={`prompt-${block.key}`}>
+                    {block.label}
+                  </label>
+                  <Button
+                    size="sm"
+                    disabled={savingPrompt === block.key || !prompts[block.key]?.trim()}
+                    onClick={() => savePrompt(block.key)}
+                  >
+                    {savingPrompt === block.key ? "Publishing…" : "Save & publish"}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">{block.hint}</p>
+                <textarea
+                  id={`prompt-${block.key}`}
+                  className="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={prompts[block.key] ?? ""}
+                  onChange={(e) => setPrompts((prev) => ({ ...prev, [block.key]: e.target.value }))}
+                />
+              </div>
+            ))
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Call behaviour</CardTitle>
-          <CardDescription>Applied by the retry sweep when a call goes unanswered</CardDescription>
+          <CardTitle>Retry sweep</CardTitle>
+          <CardDescription>
+            Our own follow-up logic — separate from a campaign&apos;s own retry settings (set per-campaign when you
+            launch it).
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="grid gap-2">
             <label className="text-sm font-medium" htmlFor="max-retries">
-              Max retries per lead
+              Max attempts before giving up
             </label>
             <Input
               id="max-retries"
               type="number"
               min={0}
-              max={5}
+              max={10}
               value={form.maxRetries}
               onChange={(e) => setForm({ ...form, maxRetries: e.target.value })}
             />
+            <p className="text-xs text-muted-foreground">
+              After this many unanswered attempts, a lead moves to Unreachable.
+            </p>
           </div>
           <div className="grid gap-2">
             <label className="text-sm font-medium" htmlFor="call-gap">
@@ -1758,10 +2019,14 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
             <Input
               id="call-gap"
               type="number"
-              min={1}
+              min={0}
+              max={1440}
               value={form.callGap}
               onChange={(e) => setForm({ ...form, callGap: e.target.value })}
             />
+            <p className="text-xs text-muted-foreground">
+              A retry-pending lead won&apos;t show as callable again until this long after the last attempt.
+            </p>
           </div>
           <div className="md:col-span-2">
             <Button
@@ -1770,8 +2035,8 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
               onClick={() =>
                 save(
                   "call_behavior",
-                  { maxRetries: Number(form.maxRetries) || 0, callGap: Number(form.callGap) || 30 },
-                  "Call behaviour",
+                  { maxRetries: Number(form.maxRetries) || 0, callGapMinutes: Number(form.callGap) || 0 },
+                  "Retry sweep settings",
                 )
               }
             >
@@ -2418,6 +2683,18 @@ export function LeadCommandDashboard() {
   const [newCampaignSegment, setNewCampaignSegment] = useState<LeadSegment>("new")
   const { segments: leadSegments, refresh: refreshLeadSegments } = useLeadSegmentCounts(campaignOpen)
   const [isLaunching, setIsLaunching] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  // Defaults mirror what the launch route falls back to when these are
+  // omitted (app/api/campaigns/route.ts), so opening "Advanced" shows the
+  // real values that would apply either way, not different-looking ones.
+  const [advanced, setAdvanced] = useState({
+    concurrency: "1",
+    maxRetries: "2",
+    retryDelaySeconds: "120",
+    retryOnBusy: true,
+    retryOnNoAnswer: true,
+    retryOnVoicemail: true,
+  })
 
   // Keep the lead-count field matched to whichever segment is picked, so it
   // does not stay stuck at "100" when the selected segment only has 1 lead.
@@ -2528,6 +2805,22 @@ export function LeadCommandDashboard() {
       return
     }
 
+    const concurrency = Number(advanced.concurrency)
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 100) {
+      toast.error("Concurrency must be a whole number between 1 and 100")
+      return
+    }
+    const maxRetries = Number(advanced.maxRetries)
+    if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 10) {
+      toast.error("Retries within campaign must be a whole number between 0 and 10")
+      return
+    }
+    const retryDelaySeconds = Number(advanced.retryDelaySeconds)
+    if (!Number.isInteger(retryDelaySeconds) || retryDelaySeconds < 30 || retryDelaySeconds > 3600) {
+      toast.error("Retry delay must be a whole number of seconds between 30 and 3600")
+      return
+    }
+
     setIsLaunching(true)
     toast.info("Creating campaign… please wait.")
     try {
@@ -2535,7 +2828,15 @@ export function LeadCommandDashboard() {
         campaign_name: newCampaignName.trim(),
         lead_count: Math.min(requested, available),
         lead_segment: newCampaignSegment,
-        concurrency: 1,
+        concurrency,
+        retry_config: {
+          enabled: true,
+          max_retries: maxRetries,
+          retry_delay_seconds: retryDelaySeconds,
+          retry_on_busy: advanced.retryOnBusy,
+          retry_on_no_answer: advanced.retryOnNoAnswer,
+          retry_on_voicemail: advanced.retryOnVoicemail,
+        },
       })
       toast.success(`Campaign launched! ${result?.leads_queued ?? result?.actual_count ?? 0} leads queued.`)
       setCampaignOpen(false)
@@ -2966,6 +3267,82 @@ export function LeadCommandDashboard() {
                 Max: {leadSegments.find((s) => s.value === newCampaignSegment)?.count ?? 0} leads in this segment
               </p>
             </div>
+
+            <button
+              type="button"
+              className="flex items-center gap-1 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <ChevronDown className={cn("size-4 transition-transform", showAdvanced && "rotate-180")} />
+              Advanced settings
+            </button>
+            {showAdvanced && (
+              <div className="grid gap-4 rounded-lg border bg-muted/20 p-3 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium" htmlFor="adv-concurrency">
+                    Concurrency
+                  </label>
+                  <Input
+                    id="adv-concurrency"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={advanced.concurrency}
+                    onChange={(e) => setAdvanced({ ...advanced, concurrency: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">How many calls run at once.</p>
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium" htmlFor="adv-max-retries">
+                    Retries within this campaign
+                  </label>
+                  <Input
+                    id="adv-max-retries"
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={advanced.maxRetries}
+                    onChange={(e) => setAdvanced({ ...advanced, maxRetries: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Separate from the retry sweep in AI agent settings — this governs Dograh redialling within this
+                    one campaign.
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium" htmlFor="adv-retry-delay">
+                    Retry delay (seconds)
+                  </label>
+                  <Input
+                    id="adv-retry-delay"
+                    type="number"
+                    min={30}
+                    max={3600}
+                    value={advanced.retryDelaySeconds}
+                    onChange={(e) => setAdvanced({ ...advanced, retryDelaySeconds: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <span className="text-sm font-medium">Retry on</span>
+                  <div className="flex flex-col gap-1.5">
+                    {[
+                      { key: "retryOnBusy" as const, label: "Busy" },
+                      { key: "retryOnNoAnswer" as const, label: "No answer" },
+                      { key: "retryOnVoicemail" as const, label: "Voicemail" },
+                    ].map((opt) => (
+                      <label key={opt.key} className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={advanced[opt.key]}
+                          onChange={(e) => setAdvanced({ ...advanced, [opt.key]: e.target.checked })}
+                        />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCampaignOpen(false)}>

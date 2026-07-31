@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { getMaxRetries } from '@/lib/call-behavior';
 import { DograhClient, dograh } from '@/lib/dograh';
 import { applyRunResult, isAuthorisedCron } from '@/lib/reconcile';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
@@ -19,7 +20,11 @@ const MAX_PAGES = 20;
 /** A lead dialling for longer than this is considered stuck and is released. */
 const STUCK_LEAD_MINUTES = 60;
 
-async function reconcileCampaign(supabase: ReturnType<typeof createServerClient>, campaign: any) {
+async function reconcileCampaign(
+  supabase: ReturnType<typeof createServerClient>,
+  campaign: any,
+  maxRetries: number,
+) {
   const providerId = Number(campaign.dograh_campaign_id);
   const stats = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
 
@@ -32,7 +37,7 @@ async function reconcileCampaign(supabase: ReturnType<typeof createServerClient>
     if (!runs.length) break;
 
     for (const run of runs) {
-      const outcome = await applyRunResult(supabase, run as any, campaign.id);
+      const outcome = await applyRunResult(supabase, run as any, campaign.id, maxRetries);
       stats[outcome] += 1;
     }
 
@@ -99,10 +104,11 @@ async function handler(request: Request) {
     }
 
     const totals = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
+    const maxRetries = await getMaxRetries(supabase);
 
     for (const campaign of campaigns ?? []) {
       try {
-        const stats = await reconcileCampaign(supabase, campaign);
+        const stats = await reconcileCampaign(supabase, campaign, maxRetries);
         for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += stats[key];
       } catch (err) {
         console.error(`[cron:reconcile] campaign ${campaign.id} failed`, err);

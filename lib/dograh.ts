@@ -244,6 +244,51 @@ export class DograhClient {
     if (Array.isArray(data)) return data;
     return data?.campaigns ?? [];
   }
+
+  /**
+   * Adjusts a live campaign's concurrency/retry/circuit-breaker settings.
+   * Works on any non-terminal campaign (queued, running, paused) - Dograh
+   * rejects completed/failed ones with a 400.
+   */
+  async updateCampaignSettings(
+    campaignId: number,
+    settings: {
+      max_concurrency?: number;
+      retry_config?: Record<string, any>;
+      circuit_breaker?: Record<string, any>;
+    },
+  ): Promise<DograhCampaignResponse> {
+    return this.request<DograhCampaignResponse>(`/api/v1/campaign/${campaignId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
+  }
+
+  /**
+   * `/fetch/{id}` (not the masked admin GET) - returns the workflow with real,
+   * usable credentials in workflow_configurations, exactly what the calling
+   * engine itself reads. Round-tripping this object through updateWorkflow()
+   * unchanged (aside from the fields you intentionally edit) keeps every API
+   * key intact; Dograh masks keys only on the separate admin-facing GET.
+   */
+  async getWorkflow(workflowId: number): Promise<any> {
+    return this.request<any>(`/api/v1/workflow/fetch/${workflowId}`);
+  }
+
+  async updateWorkflow(workflowId: number, workflow_definition: any, workflow_configurations: any): Promise<any> {
+    return this.request<any>(`/api/v1/workflow/${workflowId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ workflow_definition, workflow_configurations }),
+    });
+  }
+
+  /** Promotes the current draft to the live version callers actually get. */
+  async publishWorkflow(workflowId: number): Promise<any> {
+    return this.request<any>(`/api/v1/workflow/${workflowId}/publish`, {
+      method: 'POST',
+      idempotencyKey: `publish-${workflowId}-${Date.now()}`,
+    });
+  }
 }
 
 export const dograh = new DograhClient();
