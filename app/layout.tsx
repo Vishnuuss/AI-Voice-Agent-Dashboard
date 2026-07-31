@@ -7,16 +7,13 @@ const geistSans = Geist({ subsets: ["latin"], variable: "--font-geist-sans" })
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" })
 
 export const metadata: Metadata = {
-  title: "AI Voice Agent | Loan Lead Operations",
+  title: "BS Wealth | Loan Lead Operations",
   description: "Real-time visibility into AI loan-lead qualification, calls, follow-ups, and campaign performance.",
 }
 
 export const viewport: Viewport = {
-  colorScheme: "light dark",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f8f6" },
-    { media: "(prefers-color-scheme: dark)", color: "#111413" },
-  ],
+  colorScheme: "dark",
+  themeColor: "#0f2138",
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

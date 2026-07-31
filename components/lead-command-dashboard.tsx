@@ -44,7 +44,6 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   Target,
   TrendingUp,
   Upload,
@@ -70,6 +69,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { createBrowserClient } from "@/lib/supabase-browser"
+import { BsWealthMark, BsWealthWordmark } from "@/components/brand/bs-wealth-mark"
 
 // ─── CONSTANTS & HELPERS ───────────────────────────────
 
@@ -372,22 +372,22 @@ function OverviewPage({
       )}
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card>
+        <Card className="transition-shadow hover:shadow-elevate-lg">
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary">
-                <Users className="size-4 text-muted-foreground" />
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
+                <Users className="size-4 text-primary" />
               </div>
             </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight">{totalLeads.toLocaleString()}</p>
+            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{totalLeads.toLocaleString()}</p>
             <p className="mt-1 text-xs text-muted-foreground">Total leads</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="transition-shadow hover:shadow-elevate-lg">
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary">
-                <PhoneCall className="size-4 text-muted-foreground" />
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
+                <PhoneCall className="size-4 text-primary" />
               </div>
               {totalCalls > 0 && (
                 <span className="flex items-center gap-1 text-xs font-medium text-primary">
@@ -396,29 +396,29 @@ function OverviewPage({
                 </span>
               )}
             </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight">{totalCalls.toLocaleString()}</p>
+            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{totalCalls.toLocaleString()}</p>
             <p className="mt-1 text-xs text-muted-foreground">Calls made</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="transition-shadow hover:shadow-elevate-lg">
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary">
-                <Target className="size-4 text-muted-foreground" />
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
+                <Target className="size-4 text-primary" />
               </div>
             </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight">{qualifiedLeads.toLocaleString()}</p>
+            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{qualifiedLeads.toLocaleString()}</p>
             <p className="mt-1 text-xs text-muted-foreground">Qualified</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="transition-shadow hover:shadow-elevate-lg">
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-secondary">
-                <CircleDollarSign className="size-4 text-muted-foreground" />
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
+                <CircleDollarSign className="size-4 text-primary" />
               </div>
             </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight">{formatDuration(callStats?.avg_duration)}</p>
+            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{formatDuration(callStats?.avg_duration)}</p>
             <p className="mt-1 text-xs text-muted-foreground">Avg. connected call</p>
           </CardContent>
         </Card>
@@ -496,9 +496,9 @@ function OverviewPage({
                 <Progress value={Math.min(step.percent, 100)} />
               </div>
             ))}
-            <div className="flex items-center justify-between rounded-lg bg-secondary p-3">
+            <div className="flex items-center justify-between rounded-lg bg-primary/10 p-3">
               <div>
-                <p className="text-sm font-medium">
+                <p className="text-sm font-medium tabular-nums">
                   {totalLeads > 0 ? ((qualifiedLeads / totalLeads) * 100).toFixed(1) : "0"}% qualification
                 </p>
                 <p className="text-xs text-muted-foreground">From all leads</p>
@@ -2965,69 +2965,78 @@ export function LeadCommandDashboard() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r bg-sidebar transition-transform lg:static lg:z-auto lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-elevate-lg transition-transform lg:static lg:z-auto lg:w-64 lg:translate-x-0 lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 items-center justify-between border-b px-5">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-sidebar-border px-5">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Sparkles className="size-4" />
-            </div>
-            <div>
-              <p className="font-semibold tracking-tight">AI Voice Agent</p>
-              <p className="text-xs text-muted-foreground">Loan lead operations</p>
-            </div>
+            <BsWealthMark size={34} />
+            <BsWealthWordmark />
           </div>
-          <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(false)}>
+          <Button variant="ghost" size="icon" className="lg:hidden text-sidebar-foreground hover:bg-sidebar-accent" onClick={() => setSidebarOpen(false)}>
             <X />
             <span className="sr-only">Close menu</span>
           </Button>
         </div>
 
-        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-1 p-3">
-          <p className="px-3 pb-2 pt-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace</p>
+        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
+          <p className="px-3 pb-2 pt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">Workspace</p>
           {navItems.map((item) => {
             // These badges were hard-coded to 20 and 6 regardless of the data.
             const count = navCount(item.countKey)
+            const active = activeNav === item.label
             return (
               <button
                 key={item.label}
                 onClick={() => handleNavClick(item.label)}
                 className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  activeNav === item.label
+                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                  active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
                 )}
               >
-                <item.icon className="size-4" />
+                {active && (
+                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" aria-hidden />
+                )}
+                <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
                 <span className="flex-1 text-left">{item.label}</span>
-                {count !== null && <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs">{count}</span>}
+                {count !== null && (
+                  <span className={cn("rounded-md px-1.5 py-0.5 text-xs tabular-nums", active ? "bg-primary/20 text-primary" : "bg-sidebar-foreground/10 text-sidebar-foreground/60")}>
+                    {count}
+                  </span>
+                )}
               </button>
             )
           })}
 
-          <p className="px-3 pb-2 pt-6 text-xs font-medium uppercase tracking-wider text-muted-foreground">System</p>
-          {systemNavItems.map((item) => (
-            <button
-              key={item.label}
-              onClick={() => handleNavClick(item.label)}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                activeNav === item.label
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-              )}
-            >
-              <item.icon className="size-4" />
-              {item.label}
-            </button>
-          ))}
+          <p className="px-3 pb-2 pt-6 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">System</p>
+          {systemNavItems.map((item) => {
+            const active = activeNav === item.label
+            return (
+              <button
+                key={item.label}
+                onClick={() => handleNavClick(item.label)}
+                className={cn(
+                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                )}
+              >
+                {active && (
+                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" aria-hidden />
+                )}
+                <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
+                {item.label}
+              </button>
+            )
+          })}
         </nav>
 
-        <div className="p-3">
-          <Card className="bg-secondary shadow-none">
+        <div className="shrink-0 p-3">
+          <Card className="border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground shadow-none">
             <CardContent className="flex items-center gap-3 p-3">
               <span className="relative flex size-2">
                 <span
@@ -3045,22 +3054,22 @@ export function LeadCommandDashboard() {
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{health?.healthy ? "All systems go" : "Check integrations"}</p>
-                <p className="truncate text-xs text-muted-foreground">
+                <p className="truncate text-xs text-sidebar-foreground/50">
                   {leadStats?.queued ?? 0} queued · {leadStats?.retry_pending ?? 0} retrying
                 </p>
               </div>
-              <Headphones className="size-4 text-muted-foreground" />
+              <Headphones className="size-4 text-sidebar-foreground/40" />
             </CardContent>
           </Card>
           <div className="mt-3 flex items-center gap-3 px-2 py-2">
-            <Avatar className="size-8">
-              <AvatarFallback>SR</AvatarFallback>
+            <Avatar className="size-8 ring-1 ring-primary/30">
+              <AvatarFallback className="bg-sidebar-accent text-primary">SR</AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">Sales Admin</p>
-              <p className="truncate text-xs text-muted-foreground">BS Wealth Finance</p>
+              <p className="truncate text-sm font-medium text-sidebar-foreground">Sales Admin</p>
+              <p className="truncate text-xs text-sidebar-foreground/50">BS Wealth Finance</p>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleLogout} aria-label="Sign out">
+            <Button variant="ghost" size="icon" className="text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground" onClick={handleLogout} aria-label="Sign out">
               <LogOut className="size-4" />
             </Button>
           </div>
@@ -3069,7 +3078,7 @@ export function LeadCommandDashboard() {
 
       {/* Main content */}
       <main className="min-w-0 flex-1">
-        <header className="flex h-16 items-center gap-3 border-b bg-background px-4 md:px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b border-border/70 bg-background/85 px-3 backdrop-blur-md sm:gap-3 md:px-6">
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(true)}>
             <Menu />
             <span className="sr-only">Open menu</span>
@@ -3077,8 +3086,8 @@ export function LeadCommandDashboard() {
           <div className="relative max-w-md flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <input
-              className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-              placeholder="Search leads by name, phone, city or email…"
+              className="h-9 w-full min-w-0 rounded-full border border-input bg-muted/40 px-2.5 py-1 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+              placeholder="Search leads…"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value)
@@ -3087,17 +3096,17 @@ export function LeadCommandDashboard() {
               }}
             />
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} />
-            <Button variant="outline" size="sm" disabled={isUploading} onClick={() => fileInputRef.current?.click()}>
+            <Button variant="outline" size="sm" disabled={isUploading} onClick={() => fileInputRef.current?.click()} className="px-2.5 sm:px-3">
               <Upload data-icon="inline-start" />
-              {isUploading ? "Uploading…" : "Import leads"}
+              <span className="hidden sm:inline">{isUploading ? "Uploading…" : "Import leads"}</span>
             </Button>
-            <Button size="sm" onClick={() => setCampaignOpen(true)}>
+            <Button size="sm" onClick={() => setCampaignOpen(true)} className="px-2.5 sm:px-3">
               <Phone data-icon="inline-start" />
-              Start campaign
+              <span className="hidden sm:inline">Start campaign</span>
             </Button>
-            <Button variant="ghost" size="icon" onClick={refreshAll} aria-label="Refresh data">
+            <Button variant="ghost" size="icon" onClick={refreshAll} aria-label="Refresh data" className="hidden sm:inline-flex">
               <RefreshCw className={cn(leadsLoading && "animate-spin")} />
             </Button>
             <div className="relative">
@@ -3114,8 +3123,36 @@ export function LeadCommandDashboard() {
           </div>
         </header>
 
-        <div className="mx-auto flex max-w-screen-2xl flex-col gap-5 p-4 md:p-6">{renderPage()}</div>
+        <div className="mx-auto flex max-w-screen-2xl flex-col gap-5 p-4 pb-24 md:p-6 lg:pb-6">{renderPage()}</div>
       </main>
+
+      {/* Mobile bottom tab bar — the off-canvas sidebar drawer stays available via
+          the hamburger for the full nav, but the 5 most-used destinations get a
+          thumb-reachable bar so the phone experience isn't "open a drawer every tap". */}
+      <nav
+        aria-label="Primary (mobile)"
+        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-sidebar-border bg-sidebar text-sidebar-foreground shadow-elevate-lg lg:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {[...navItems.slice(0, 4), { label: "Menu", icon: Menu, countKey: null as null }].map((item) => {
+          const isMenu = item.label === "Menu"
+          const active = !isMenu && activeNav === item.label
+          return (
+            <button
+              key={item.label}
+              onClick={() => (isMenu ? setSidebarOpen(true) : handleNavClick(item.label))}
+              className={cn(
+                "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium transition-colors",
+                active ? "text-primary" : "text-sidebar-foreground/55 active:text-sidebar-foreground",
+              )}
+              aria-current={active ? "page" : undefined}
+            >
+              <item.icon className="size-5" />
+              <span className="truncate">{item.label}</span>
+            </button>
+          )
+        })}
+      </nav>
 
       <LeadDetailSheet leadId={selectedLeadId} onClose={() => setSelectedLeadId(null)} onSaved={refreshAll} />
 
