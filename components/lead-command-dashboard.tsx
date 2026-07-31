@@ -69,7 +69,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { createBrowserClient } from "@/lib/supabase-browser"
-import { BsWealthMark, BsWealthWordmark } from "@/components/brand/bs-wealth-mark"
+import { BsWealthLockupInline } from "@/components/brand/bs-wealth-mark"
 
 // ─── CONSTANTS & HELPERS ───────────────────────────────
 
@@ -140,6 +140,97 @@ function initialsOf(name?: string | null) {
 /** Digits only, so tel:/wa.me links work regardless of how the number was stored. */
 function dialable(phone?: string | null) {
   return (phone || "").replace(/[^\d+]/g, "")
+}
+
+/** Time-of-day greeting, so the hero is not permanently stuck on "morning". */
+function greetingFor(date: Date) {
+  const hour = date.getHours()
+  if (hour < 12) return "Good morning"
+  if (hour < 17) return "Good afternoon"
+  return "Good evening"
+}
+
+/**
+ * Counts a figure up to its value on mount, then tracks it thereafter.
+ *
+ * Driven by rAF against wall-clock time (not a fixed per-frame step), so the
+ * duration holds regardless of refresh rate and it cannot overshoot. Skips
+ * straight to the final value when the OS asks for reduced motion, and for
+ * subsequent live updates — a number that re-counts on every 15s poll would be
+ * unreadable, so only the first paint animates.
+ */
+function useCountUp(value: number, durationMs = 900) {
+  const [display, setDisplay] = useState(0)
+  const hasAnimated = useRef(false)
+
+  useEffect(() => {
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+
+    if (reduced || hasAnimated.current || !Number.isFinite(value) || value === 0) {
+      setDisplay(value)
+      hasAnimated.current = true
+      return
+    }
+
+    hasAnimated.current = true
+    const from = 0
+    const start = performance.now()
+    let raf = 0
+
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / durationMs, 1)
+      // expo-out, matching the easing token the rest of the product uses.
+      const eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t)
+      setDisplay(Math.round(from + (value - from) * eased))
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [value, durationMs])
+
+  // Live updates after the intro land immediately rather than re-counting.
+  useEffect(() => {
+    if (hasAnimated.current) setDisplay(value)
+  }, [value])
+
+  return display
+}
+
+/** A single headline figure with its label, used across the stat rows. */
+function StatFigure({
+  icon: Icon,
+  value,
+  label,
+  hint,
+  raw,
+}: {
+  icon: React.ElementType
+  value: number
+  label: string
+  hint?: React.ReactNode
+  /** Pass a pre-formatted string (e.g. a duration) to skip the count-up. */
+  raw?: string
+}) {
+  const counted = useCountUp(value)
+  return (
+    <Card className="hover-lift group/stat">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-colors duration-300 group-hover/stat:bg-primary group-hover/stat:text-primary-foreground">
+            <Icon className="size-4" />
+          </div>
+          {hint}
+        </div>
+        <p className="mt-5 font-display text-3xl font-semibold tracking-tight tabular-nums">
+          {raw ?? counted.toLocaleString()}
+        </p>
+        <p className="mt-1.5 text-xs tracking-wide text-muted-foreground">{label}</p>
+      </CardContent>
+    </Card>
+  )
 }
 
 function getScoreLabel(score: number) {
@@ -332,25 +423,48 @@ function OverviewPage({
 
   return (
     <>
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-balance text-2xl font-semibold tracking-tight md:text-3xl">Good morning, team</h1>
-            {/* "Live" now means something: the dashboard re-polls every 15s. */}
-            <Badge variant="outline" className="gap-1">
-              <RefreshCw className={cn("size-3", isRefreshing && "animate-spin")} />
-              Live
-            </Badge>
+      {/* Hero. Editorial rather than dashboard-standard: the greeting is set in
+          the display Didone at a size that earns the space, and a warm ambient
+          wash drifts behind it so the top of the page has depth instead of
+          being a bare heading on flat paper. */}
+      <section className="ambient-wash relative -mx-4 -mt-4 overflow-hidden border-b border-border/60 px-4 pb-8 pt-10 md:-mx-8 md:-mt-8 md:px-8 md:pb-10 md:pt-14">
+        <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="motion-fade flex items-center gap-2.5">
+              <span className="relative flex size-1.5">
+                <span className="pulse-soft absolute inline-flex size-full rounded-full bg-primary" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Live · updates every 15s
+              </span>
+              {isRefreshing && <RefreshCw className="size-3 animate-spin text-muted-foreground" />}
+            </div>
+
+            <h1 className="motion-rise mt-4 text-balance font-display text-4xl font-semibold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
+              {greetingFor(new Date())},
+              <span className="text-muted-foreground"> team</span>
+            </h1>
+
+            <p className="motion-rise mt-4 max-w-[52ch] text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
+              Your agent has placed{" "}
+              <span className="font-medium text-foreground tabular-nums">{totalCalls.toLocaleString()}</span>{" "}
+              {totalCalls === 1 ? "call" : "calls"} and qualified{" "}
+              <span className="font-medium text-foreground tabular-nums">{qualifiedLeads.toLocaleString()}</span>{" "}
+              {qualifiedLeads === 1 ? "lead" : "leads"} so far.
+            </p>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">Here&apos;s what your AI agent is doing today.</p>
+
+          <div className="motion-fade flex shrink-0 items-center gap-3">
+            <Tabs value={range} onValueChange={setRange}>
+              <TabsList>
+                <TabsTrigger value="24h">24h</TabsTrigger>
+                <TabsTrigger value="7d">7 days</TabsTrigger>
+                <TabsTrigger value="30d">30 days</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
         </div>
-        <Tabs value={range} onValueChange={setRange}>
-          <TabsList>
-            <TabsTrigger value="24h">24h</TabsTrigger>
-            <TabsTrigger value="7d">7 days</TabsTrigger>
-            <TabsTrigger value="30d">30 days</TabsTrigger>
-          </TabsList>
-        </Tabs>
       </section>
 
       {health && !health.healthy && (
@@ -371,62 +485,33 @@ function OverviewPage({
         </Card>
       )}
 
-      <section className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card className="transition-shadow hover:shadow-elevate-lg">
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
-                <Users className="size-4 text-primary" />
-              </div>
-            </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{totalLeads.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Total leads</p>
-          </CardContent>
-        </Card>
-        <Card className="transition-shadow hover:shadow-elevate-lg">
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
-                <PhoneCall className="size-4 text-primary" />
-              </div>
-              {totalCalls > 0 && (
-                <span className="flex items-center gap-1 text-xs font-medium text-primary">
-                  {connectRate}% connect
-                  <ArrowUpRight className="size-3" />
-                </span>
-              )}
-            </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{totalCalls.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Calls made</p>
-          </CardContent>
-        </Card>
-        <Card className="transition-shadow hover:shadow-elevate-lg">
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
-                <Target className="size-4 text-primary" />
-              </div>
-            </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{qualifiedLeads.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Qualified</p>
-          </CardContent>
-        </Card>
-        <Card className="transition-shadow hover:shadow-elevate-lg">
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/12">
-                <CircleDollarSign className="size-4 text-primary" />
-              </div>
-            </div>
-            <p className="mt-4 text-2xl font-semibold tracking-tight tabular-nums">{formatDuration(callStats?.avg_duration)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Avg. connected call</p>
-          </CardContent>
-        </Card>
+      <section className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatFigure icon={Users} value={totalLeads} label="Total leads" />
+        <StatFigure
+          icon={PhoneCall}
+          value={totalCalls}
+          label="Calls made"
+          hint={
+            totalCalls > 0 ? (
+              <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                {connectRate}% connect
+                <ArrowUpRight className="size-3" />
+              </span>
+            ) : undefined
+          }
+        />
+        <StatFigure icon={Target} value={qualifiedLeads} label="Qualified" />
+        <StatFigure
+          icon={CircleDollarSign}
+          value={0}
+          raw={formatDuration(callStats?.avg_duration)}
+          label="Avg. connected call"
+        />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1.55fr_1fr]">
         <Card>
-          <CardHeader className="flex-row items-start justify-between">
+          <CardHeader className="flex flex-row items-start justify-between gap-3">
             <div>
               <CardTitle>Call performance</CardTitle>
               <CardDescription>Daily outreach and qualification trend</CardDescription>
@@ -442,7 +527,7 @@ function OverviewPage({
                 No calls in this period yet.
               </div>
             ) : (
-              <ChartContainer config={chartConfig} className="h-60 w-full">
+              <ChartContainer config={chartConfig} className="draw-line h-64 w-full">
                 <AreaChart data={chartData} margin={{ left: -20, right: 4, top: 10 }}>
                   <defs>
                     <linearGradient id="calls-fill" x1="0" y1="0" x2="0" y2="1">
@@ -511,7 +596,7 @@ function OverviewPage({
 
       <section className="grid gap-4 lg:grid-cols-[1.55fr_1fr]">
         <Card className="min-w-0">
-          <CardHeader className="flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
             <div>
               <CardTitle>Recent leads</CardTitle>
               <CardDescription>Latest activity across all sources</CardDescription>
@@ -627,7 +712,7 @@ function LeadsPage({
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">All Leads</h1>
+          <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">All Leads</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Manage and track all {leadStats?.total ?? totalCount} leads across sources.
           </p>
@@ -649,7 +734,7 @@ function LeadsPage({
         </div>
       </section>
 
-      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-2xl font-semibold">{leadStats?.total ?? 0}</p>
@@ -724,7 +809,7 @@ function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => v
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Call History</h1>
+          <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Call History</h1>
           <p className="mt-1 text-sm text-muted-foreground">{callStats?.total ?? 0} calls recorded.</p>
         </div>
         <div className="flex items-center gap-2">
@@ -743,7 +828,7 @@ function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => v
         </div>
       </section>
 
-      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
@@ -998,7 +1083,7 @@ function CampaignsPage({
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Campaigns</h1>
+          <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Campaigns</h1>
           <p className="mt-1 text-sm text-muted-foreground">Manage all AI calling campaigns.</p>
         </div>
         <div className="flex gap-2">
@@ -1013,7 +1098,7 @@ function CampaignsPage({
         </div>
       </section>
 
-      <div className="stagger-children grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-2xl font-semibold">{activeCampaigns}</p>
@@ -1340,7 +1425,7 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any) => void }) 
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Follow-ups</h1>
+          <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Follow-ups</h1>
           <p className="mt-1 text-sm text-muted-foreground">{totalCount} leads have a follow-up scheduled.</p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh}>
@@ -1520,15 +1605,72 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
 
   return (
     <>
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Reports &amp; Analytics</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Deep insights into lead acquisition and agent performance.</p>
+      {/* Reports hero. The four rates that actually answer "is this working?"
+          are pulled out of the charts and set large across an editorial band,
+          so the answer is legible before any chart is read. */}
+      <section className="ambient-wash relative -mx-4 -mt-4 overflow-hidden border-b border-border/60 px-4 pb-8 pt-10 md:-mx-8 md:-mt-8 md:px-8 md:pb-10 md:pt-14">
+        <div className="relative z-10">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="motion-fade text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Performance
+              </p>
+              <h1 className="motion-rise mt-3 text-balance font-display text-4xl font-semibold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
+                Reports
+                <span className="text-muted-foreground"> &amp; analytics</span>
+              </h1>
+              <p className="motion-rise mt-4 max-w-[52ch] text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
+                Where your leads come from, how the agent performs on the phone, and what it gets wrong.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={downloadLeadExport}
+              disabled={exporting}
+              className="motion-fade shrink-0"
+            >
+              <Download data-icon="inline-start" />
+              {exporting ? "Preparing…" : "Export all leads"}
+            </Button>
+          </div>
+
+          {/* Headline rates, divided rather than boxed — cards here would add
+              four more containers to a page that is already all containers. */}
+          <dl className="stagger mt-10 grid grid-cols-2 gap-x-6 gap-y-8 border-t border-border/60 pt-8 lg:grid-cols-4 lg:divide-x lg:divide-border/60">
+            {[
+              {
+                label: "Qualification rate",
+                value: `${qualificationRate}%`,
+                sub: `${(leadStats?.qualified ?? 0).toLocaleString()} of ${(leadStats?.total ?? 0).toLocaleString()} leads`,
+              },
+              {
+                label: "Connect rate",
+                value: totalCalls > 0 ? `${Math.round(((callStats?.connected ?? 0) / totalCalls) * 100)}%` : "—",
+                sub: `${(callStats?.connected ?? 0).toLocaleString()} of ${totalCalls.toLocaleString()} calls`,
+              },
+              {
+                label: "Avg. connected call",
+                value: formatDuration(callStats?.avg_duration),
+                sub: "Time on the phone",
+              },
+              {
+                label: "Top source",
+                value: bestSource?.source ?? "—",
+                sub: bestSource ? `${bestSource.count.toLocaleString()} leads` : "No leads yet",
+              },
+            ].map((kpi, i) => (
+              <div key={kpi.label} className={cn("min-w-0", i > 0 && "lg:pl-6")}>
+                <dt className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  {kpi.label}
+                </dt>
+                <dd className="mt-2.5 truncate font-display text-3xl font-semibold tracking-tight tabular-nums md:text-4xl">
+                  {kpi.value}
+                </dd>
+                <dd className="mt-1.5 truncate text-xs text-muted-foreground">{kpi.sub}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <Button variant="outline" size="sm" onClick={downloadLeadExport} disabled={exporting}>
-          <Download data-icon="inline-start" />
-          {exporting ? "Preparing…" : "Export all leads"}
-        </Button>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -1544,17 +1686,26 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
               </div>
             ) : (
               <>
+                <div className="relative">
                 <ChartContainer config={pieConfig} className="mx-auto h-64 w-full">
                   <PieChart>
                     <ChartTooltip content={<ChartTooltipContent />} />
+                    {/* Donut rather than pie: the hole carries the total, and
+                        the thinner ring reads as a considered chart instead of
+                        a default one. Slice labels are dropped in favour of the
+                        legend below — they collided at narrow widths. */}
                     <Pie
                       data={pieData}
                       dataKey="value"
                       nameKey="name"
                       cx="50%"
                       cy="50%"
-                      outerRadius={90}
-                      label={({ name, value }) => `${name}: ${value}`}
+                      innerRadius={58}
+                      outerRadius={92}
+                      paddingAngle={2}
+                      cornerRadius={4}
+                      strokeWidth={0}
+                      animationDuration={900}
                     >
                       {pieData.map((entry, i) => (
                         <Cell key={i} fill={entry.fill} />
@@ -1562,11 +1713,24 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
                     </Pie>
                   </PieChart>
                 </ChartContainer>
-                <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                {/* Total sits in the donut's hole, absolutely centred over the
+                    ring it belongs to, so the part-to-whole relationship reads
+                    without the eye leaving the chart. */}
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="font-display text-3xl font-semibold tabular-nums">
+                    {pieData.reduce((sum, s) => sum + s.value, 0).toLocaleString()}
+                  </span>
+                  <span className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    Leads
+                  </span>
+                </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border/60 pt-4 text-xs">
                   {pieData.map((src, i) => (
                     <span key={i} className="flex items-center gap-2">
-                      <i className="size-2 rounded-full" style={{ background: src.fill }} />
-                      {src.name}: {src.value}
+                      <i className="size-2 shrink-0 rounded-full" style={{ background: src.fill }} />
+                      <span className="text-muted-foreground">{src.name}</span>
+                      <span className="font-medium tabular-nums">{src.value}</span>
                     </span>
                   ))}
                 </div>
@@ -1605,7 +1769,7 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
       {/* The feedback loop: Dograh's QA node grades every sampled call and these
           are the recurring faults, worst first, each with the lever that fixes it. */}
       <Card>
-        <CardHeader className="flex-row items-start justify-between">
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
             <CardTitle>What the agent is getting wrong</CardTitle>
             <CardDescription>
@@ -1856,7 +2020,7 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
   return (
     <>
       <section>
-        <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">AI Agent Configuration</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">AI Agent Configuration</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Voice agent preferences. Prompts and voices live in the Dograh workflow; these values are stored here for your
           team&apos;s reference and used by the retry rules.
@@ -1934,7 +2098,7 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
       </div>
 
       <Card>
-        <CardHeader className="flex-row items-start justify-between">
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
             <CardTitle>Agent script</CardTitle>
             <CardDescription>
@@ -2109,7 +2273,7 @@ function SettingsPage({ health, onLogout }: { health: any; onLogout: () => void 
   return (
     <>
       <section>
-        <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Settings</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">Manage your workspace, integrations, and preferences.</p>
       </section>
 
@@ -2965,22 +3129,20 @@ export function LeadCommandDashboard() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-elevate-lg transition-transform lg:static lg:z-auto lg:w-64 lg:translate-x-0 lg:shadow-none",
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-float transition-transform lg:static lg:z-auto lg:w-64 lg:translate-x-0 lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-sidebar-border px-5">
-          <div className="flex items-center gap-3">
-            <BsWealthMark size={34} />
-            <BsWealthWordmark />
-          </div>
+        <div className="flex h-20 shrink-0 items-center justify-between border-b border-sidebar-border px-6">
+          <BsWealthLockupInline />
+
           <Button variant="ghost" size="icon" className="lg:hidden text-sidebar-foreground hover:bg-sidebar-accent" onClick={() => setSidebarOpen(false)}>
             <X />
             <span className="sr-only">Close menu</span>
           </Button>
         </div>
 
-        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
+        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
           <p className="px-3 pb-2 pt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">Workspace</p>
           {navItems.map((item) => {
             // These badges were hard-coded to 20 and 6 regardless of the data.
@@ -2991,14 +3153,14 @@ export function LeadCommandDashboard() {
                 key={item.label}
                 onClick={() => handleNavClick(item.label)}
                 className={cn(
-                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-300 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] active:scale-[0.985]",
                   active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
                 )}
               >
                 {active && (
-                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary duration-200 animate-in slide-in-from-left-1 fade-in" aria-hidden />
+                  <span className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-primary motion-scale" aria-hidden />
                 )}
                 <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
                 <span className="flex-1 text-left">{item.label}</span>
@@ -3019,14 +3181,14 @@ export function LeadCommandDashboard() {
                 key={item.label}
                 onClick={() => handleNavClick(item.label)}
                 className={cn(
-                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150",
+                  "group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-300 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] active:scale-[0.985]",
                   active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
                 )}
               >
                 {active && (
-                  <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary duration-200 animate-in slide-in-from-left-1 fade-in" aria-hidden />
+                  <span className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-primary motion-scale" aria-hidden />
                 )}
                 <item.icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/80")} />
                 {item.label}
@@ -3078,7 +3240,7 @@ export function LeadCommandDashboard() {
 
       {/* Main content */}
       <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b border-border/70 bg-background/85 px-3 backdrop-blur-md sm:gap-3 md:px-6">
+        <header className="sticky top-0 z-30 flex h-20 items-center gap-2 border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl sm:gap-3 md:px-6">
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(true)}>
             <Menu />
             <span className="sr-only">Open menu</span>
@@ -3125,7 +3287,7 @@ export function LeadCommandDashboard() {
 
         <div
           key={activeNav}
-          className="mx-auto flex max-w-screen-2xl flex-col gap-5 p-4 pb-24 duration-300 animate-in fade-in slide-in-from-bottom-2 md:p-6 lg:pb-6"
+          className="motion-rise mx-auto flex max-w-screen-2xl flex-col gap-6 p-4 pb-24 md:p-8 lg:pb-10"
         >
           {renderPage()}
         </div>
@@ -3136,7 +3298,7 @@ export function LeadCommandDashboard() {
           thumb-reachable bar so the phone experience isn't "open a drawer every tap". */}
       <nav
         aria-label="Primary (mobile)"
-        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-sidebar-border bg-sidebar text-sidebar-foreground shadow-elevate-lg lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-sidebar-border bg-sidebar text-sidebar-foreground shadow-float lg:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {[...navItems.slice(0, 4), { label: "Menu", icon: Menu, countKey: null as null }].map((item) => {
