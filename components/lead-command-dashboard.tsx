@@ -5,7 +5,7 @@ import { useLeads, useLeadStats, useLead, updateLead, type LeadQuery } from '@/h
 import { useCampaigns, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
 import { useCalls, useCallStats, useTranscript } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
-import { useHealth, useOverview, useSources, useWeekly } from '@/hooks/use-reports'
+import { useHealth, useOverview, useQuality, useSources, useWeekly } from '@/hooks/use-reports'
 import {
   Activity,
   AlertTriangle,
@@ -1301,6 +1301,7 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any) => void }) 
 function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any }) {
   const { data: sources, isLoading: sourcesLoading } = useSources()
   const { data: weekly, isLoading: weeklyLoading } = useWeekly()
+  const { data: quality, isLoading: qualityLoading } = useQuality(30)
   const [exporting, setExporting] = useState(false)
 
   const pieData = useMemo(
@@ -1437,6 +1438,69 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
           </CardContent>
         </Card>
       </div>
+
+      {/* The feedback loop: Dograh's QA node grades every sampled call and these
+          are the recurring faults, worst first, each with the lever that fixes it. */}
+      <Card>
+        <CardHeader className="flex-row items-start justify-between">
+          <div>
+            <CardTitle>What the agent is getting wrong</CardTitle>
+            <CardDescription>
+              {quality
+                ? `${quality.calls_reviewed} of ${quality.calls_total} calls reviewed by QA in the last 30 days` +
+                  (quality.avg_quality_score !== null ? ` · average quality ${quality.avg_quality_score}/10` : '')
+                : 'Automatic QA review of every call'}
+            </CardDescription>
+          </div>
+          {quality?.avg_quality_score !== null && quality?.avg_quality_score !== undefined && (
+            <Badge variant={quality.avg_quality_score >= 7 ? 'default' : 'destructive'}>
+              {quality.avg_quality_score}/10
+            </Badge>
+          )}
+        </CardHeader>
+        <CardContent className="overflow-x-auto p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Problem</TableHead>
+                <TableHead>Calls</TableHead>
+                <TableHead>Example</TableHead>
+                <TableHead>How to fix</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {!quality || quality.issues.length === 0 ? (
+                <EmptyRow colSpan={4}>
+                  {qualityLoading
+                    ? 'Loading QA review…'
+                    : quality && quality.calls_reviewed === 0
+                      ? 'No calls have been QA-reviewed yet. Reviews appear after the next calls complete.'
+                      : 'No problems detected in the reviewed calls.'}
+                </EmptyRow>
+              ) : (
+                quality.issues.map((issue) => (
+                  <TableRow key={issue.tag}>
+                    <TableCell>
+                      <p className="font-medium capitalize">{issue.label}</p>
+                      <p className="font-mono text-xs text-muted-foreground">{issue.tag}</p>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-semibold">{issue.count}</span>
+                      <span className="ml-1 text-xs text-muted-foreground">({issue.share}%)</span>
+                    </TableCell>
+                    <TableCell className="max-w-sm">
+                      <span className="text-sm text-muted-foreground">{issue.example || '—'}</span>
+                    </TableCell>
+                    <TableCell className="max-w-xs">
+                      <span className="text-sm">{issue.fix || '—'}</span>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -2236,13 +2300,43 @@ function LeadDetailSheet({
 
                       {openTranscriptId === call.id && <TranscriptView callId={call.id} />}
 
+                      {/* QA verdict for this specific call, so a bad call can be
+                          understood without listening to the recording. */}
+                      {call.gathered_context?.qa && (
+                        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">QA</span>
+                            {call.gathered_context.qa.score !== null && (
+                              <Badge variant="outline">{call.gathered_context.qa.score}/10</Badge>
+                            )}
+                            {call.gathered_context.qa.sentiment && (
+                              <span className="text-muted-foreground">{call.gathered_context.qa.sentiment}</span>
+                            )}
+                          </div>
+                          {call.gathered_context.qa.summary && (
+                            <p className="mt-1 text-muted-foreground">{call.gathered_context.qa.summary}</p>
+                          )}
+                          {(call.gathered_context.qa.tags || []).length > 0 && (
+                            <ul className="mt-1 list-inside list-disc text-muted-foreground">
+                              {call.gathered_context.qa.tags.map((t: any, i: number) => (
+                                <li key={i}>
+                                  <span className="font-mono">{t.tag}</span>
+                                  {t.reason ? ` — ${t.reason}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+
                       {call.gathered_context && Object.keys(call.gathered_context).length > 0 && (
                         <div className="rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
                           {Object.entries(call.gathered_context)
-                            .filter(([key]) => key !== "call_outcome")
+                            .filter(([key]) => key !== "call_outcome" && key !== "qa")
                             .map(([key, value]) => (
                               <div key={key}>
-                                <span className="font-medium">{key.replace(/_/g, " ")}:</span> {String(value)}
+                                <span className="font-medium">{key.replace(/_/g, " ")}:</span>{" "}
+                                {typeof value === "object" ? JSON.stringify(value) : String(value)}
                               </div>
                             ))}
                         </div>

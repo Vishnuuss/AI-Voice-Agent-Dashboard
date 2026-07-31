@@ -4,6 +4,7 @@ import {
   buildGatheredContext,
   buildNoteLine,
   extractCallSignals,
+  extractQaVerdict,
   hasQualificationSignal,
   parseFollowUpDate,
   usableMediaUrl,
@@ -81,6 +82,11 @@ export async function applyRunResult(
   });
 
   const gatheredContext = { ...context, ...buildGatheredContext(signals, result.outcome) };
+
+  // Same QA verdict the webhook stores, recovered here for any call whose
+  // webhook delivery was missed.
+  const qa = extractQaVerdict((run as any).annotations);
+  if (qa) gatheredContext.qa = qa;
 
   const nextRetryCount = (lead.retry_count ?? 0) + 1;
   const calledAt = run.created_at ?? run.started_at ?? new Date().toISOString();

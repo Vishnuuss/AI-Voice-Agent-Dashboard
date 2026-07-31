@@ -151,3 +151,29 @@ export interface HealthPayload {
 export function useHealth() {
   return useJson<HealthPayload | null>('/api/health', (p) => p, null, 60_000);
 }
+
+export interface QualityIssue {
+  tag: string;
+  label: string;
+  fix: string | null;
+  count: number;
+  share: number;
+  example: string | null;
+  call_id: string | null;
+}
+
+export interface QualityPayload {
+  calls_total: number;
+  calls_reviewed: number;
+  avg_quality_score: number | null;
+  sentiments: Record<string, number>;
+  issues: QualityIssue[];
+}
+
+/**
+ * What the AI agent is getting wrong, aggregated from Dograh's per-call QA
+ * verdicts. This is the feedback loop: fix the top row, watch it shrink.
+ */
+export function useQuality(days = 30) {
+  return useJson<QualityPayload | null>(`/api/reports/quality?days=${days}`, (p) => p, null, 60_000);
+}

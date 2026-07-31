@@ -225,6 +225,72 @@ export function hasQualificationSignal(signals: CallSignals): boolean {
   );
 }
 
+export interface QaVerdict {
+  tags: { tag: string; reason?: string }[];
+  sentiment: string | null;
+  score: number | null;
+  summary: string | null;
+}
+
+/**
+ * Dograh's QA node reviews each call against a rubric and returns tags such as
+ * DEAD_AIR, HEARING_ISSUES, READ_OPTION_LIST or GUESSED_MISHEARD. The verdict
+ * arrives either as the webhook's `qa` field or as `annotations` on the run
+ * record, nested one level per QA node id, so flatten it into one shape.
+ */
+export function extractQaVerdict(raw: unknown): QaVerdict | null {
+  if (!raw) return null;
+
+  let payload: any = raw;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof payload !== 'object') return null;
+
+  // Results are keyed by node ("qa_6": {...}); merge every node's verdict.
+  const blocks: any[] = [];
+  if (Array.isArray(payload.tags) || payload.call_quality_score !== undefined) blocks.push(payload);
+  for (const [key, value] of Object.entries(payload)) {
+    if (key.startsWith('qa_') && value && typeof value === 'object') blocks.push(value);
+    if (key === 'node_results' && value && typeof value === 'object') {
+      for (const inner of Object.values(value as Record<string, any>)) blocks.push(inner);
+    }
+  }
+  if (blocks.length === 0) return null;
+
+  // Dograh repeats each tag at the top level as an aggregate AND inside its node
+  // block, so collapse by name and keep whichever copy carries the reason.
+  const byTag = new Map<string, { tag: string; reason?: string }>();
+  let sentiment: string | null = null;
+  let score: number | null = null;
+  let summary: string | null = null;
+
+  const addTag = (tag: string, reason?: string) => {
+    const existing = byTag.get(tag);
+    if (!existing) byTag.set(tag, reason ? { tag, reason } : { tag });
+    else if (!existing.reason && reason) existing.reason = reason;
+  };
+
+  for (const block of blocks) {
+    for (const entry of block?.tags ?? []) {
+      if (typeof entry === 'string') addTag(entry);
+      else if (entry?.tag) addTag(String(entry.tag), cleanString(entry.reason) ?? undefined);
+    }
+    sentiment = sentiment ?? cleanString(block?.overall_sentiment);
+    const parsed = cleanNumber(block?.call_quality_score);
+    if (score === null && parsed !== null) score = parsed;
+    summary = summary ?? cleanString(block?.summary);
+  }
+
+  const tags = [...byTag.values()];
+  if (tags.length === 0 && score === null && !summary) return null;
+  return { tags, sentiment, score, summary };
+}
+
 /** The jsonb blob we persist on call_logs.gathered_context and leads.qual_data. */
 export function buildGatheredContext(signals: CallSignals, outcome: string): Record<string, any> {
   const context: Record<string, any> = { call_outcome: outcome };

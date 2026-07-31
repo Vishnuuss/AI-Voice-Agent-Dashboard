@@ -8,6 +8,7 @@ import {
   cleanNumber,
   cleanString,
   extractCallSignals,
+  extractQaVerdict,
   flattenPayload,
   hasQualificationSignal,
   parseFollowUpDate,
@@ -165,6 +166,13 @@ export async function POST(request: Request) {
     });
 
     const gatheredContext = buildGatheredContext(signals, result.outcome);
+
+    // Dograh's QA node grades the call (DEAD_AIR, HEARING_ISSUES, READ_OPTION_LIST,
+    // GUESSED_MISHEARD, ...). Storing it here is what turns the dashboard into a
+    // feedback loop: the Reports page aggregates these tags so recurring agent
+    // faults are visible instead of having to be found by listening to calls.
+    const qa = extractQaVerdict(raw?.qa ?? flat.qa ?? raw?.annotations);
+    if (qa) gatheredContext.qa = qa;
     const calledAt = callTime ?? new Date().toISOString();
     const nextRetryCount = (lead.retry_count ?? 0) + 1;
 
