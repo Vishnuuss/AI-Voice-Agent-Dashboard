@@ -149,13 +149,35 @@ function parsePackedNotes(notes: string | null): Record<string, string> {
   return found;
 }
 
+/**
+ * True for "type: | occupation: | income: | existing EMI:" - every segment is a
+ * label with nothing after the colon, which is what the template renders when a
+ * call was never answered and no variable resolved.
+ */
+function isEmptyLabelledList(text: string): boolean {
+  const segments = text.split('|');
+  if (segments.length < 2) return false;
+  return segments.every((segment) => {
+    const idx = segment.indexOf(':');
+    return idx > 0 && segment.slice(idx + 1).trim() === '';
+  });
+}
+
 export function extractCallSignals(raw: Record<string, any>): CallSignals {
   const flat = flattenPayload(raw ?? {});
 
   // Fill only the gaps: a real field always beats one recovered from the string.
-  const packed = parsePackedNotes(cleanString(flat.notes));
+  const rawNotes = cleanString(flat.notes);
+  const packed = parsePackedNotes(rawNotes);
   for (const [key, value] of Object.entries(packed)) {
     if (flat[key] === undefined || cleanString(flat[key]) === null) flat[key] = value;
+  }
+
+  // The template always renders its notes line, so an unanswered call produces
+  // "type:  | occupation:  | income:  | existing EMI:" - pure noise that was
+  // being written into call_logs and appended to the lead's notes.
+  if (rawNotes && Object.keys(packed).length === 0 && isEmptyLabelledList(rawNotes)) {
+    flat.notes = null;
   }
 
   const interested = cleanBoolean(
