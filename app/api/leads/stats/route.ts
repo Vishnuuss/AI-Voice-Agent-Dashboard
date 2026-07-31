@@ -5,8 +5,17 @@ export async function GET() {
   try {
     const supabase = createServerClient();
 
-    const [totalRes, qualifiedRes, notQualifiedRes, newRes, calledRes, queuedRes, followUpRes] =
-      await Promise.all([
+    const [
+      totalRes,
+      qualifiedRes,
+      notQualifiedRes,
+      newRes,
+      calledRes,
+      queuedRes,
+      followUpRes,
+      retryRes,
+      unreachableRes,
+    ] = await Promise.all([
         supabase.from('leads').select('*', { count: 'exact', head: true }),
         supabase
           .from('leads')
@@ -32,6 +41,15 @@ export async function GET() {
           .from('leads')
           .select('*', { count: 'exact', head: true })
           .not('follow_up_date', 'is', null),
+        // Unanswered leads still eligible for another attempt.
+        supabase
+          .from('leads')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'retry_pending'),
+        supabase
+          .from('leads')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['no_answer', 'unreachable']),
       ]);
 
     // Get source breakdown
@@ -55,6 +73,8 @@ export async function GET() {
       called: calledRes.count || 0,
       queued: queuedRes.count || 0,
       follow_ups: followUpRes.count || 0,
+      retry_pending: retryRes.count || 0,
+      unreachable: unreachableRes.count || 0,
       not_interested: notQualifiedRes.count || 0,
       site_visits: 0, // No site_visit tracking in current schema
       by_source: sourceBreakdown,

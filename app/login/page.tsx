@@ -10,8 +10,6 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
-  
-  const supabase = createBrowserClient();
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -19,6 +17,12 @@ export default function LoginPage() {
     setError(null);
 
     try {
+      // Built lazily, on submit. Creating it during render threw "Missing env var
+      // NEXT_PUBLIC_SUPABASE_URL" while Next prerendered this page, which failed
+      // the whole production build whenever the env vars were not present at
+      // build time.
+      const supabase = createBrowserClient();
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
 
 export interface DailyPoint {
   date: string;
@@ -73,5 +74,80 @@ export function useOverview(range = 7) {
     };
   }, [fetchOverview]);
 
+  useAutoRefresh(fetchOverview, DEFAULT_POLL_MS);
+
   return { data, isLoading, error, refresh: fetchOverview };
+}
+
+/** Minimal JSON GET with abort + auto-refresh, used by the report panels. */
+function useJson<T>(url: string, pick: (payload: any) => T, initial: T, pollMs = 60_000) {
+  const [data, setData] = useState<T>(initial);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
+
+  const fetchJson = useCallback(async () => {
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(url, { signal: abortController.signal });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      setData(pickRef.current(await response.json()));
+    } catch (err: any) {
+      if (err.name !== 'AbortError') setError(err.message || 'Request failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [url]);
+
+  useEffect(() => {
+    fetchJson();
+    return () => abortControllerRef.current?.abort();
+  }, [fetchJson]);
+
+  useAutoRefresh(fetchJson, pollMs);
+
+  return { data, isLoading, error, refresh: fetchJson };
+}
+
+export interface SourcePoint {
+  source: string;
+  count: number;
+}
+
+/** Lead source split. The Reports page previously drew a hard-coded empty pie. */
+export function useSources() {
+  return useJson<SourcePoint[]>('/api/reports/sources', (p) => p.data ?? [], []);
+}
+
+export interface WeeklyPoint {
+  week: string;
+  leads: number;
+  calls: number;
+  qualified: number;
+}
+
+export function useWeekly() {
+  return useJson<WeeklyPoint[]>('/api/reports/weekly', (p) => p.data ?? [], []);
+}
+
+export interface ServiceHealth {
+  state: 'connected' | 'error' | 'not_configured';
+  detail: string;
+}
+
+export interface HealthPayload {
+  healthy: boolean;
+  services: Record<string, ServiceHealth>;
+}
+
+/** Real integration status behind the badges that used to always read "Connected". */
+export function useHealth() {
+  return useJson<HealthPayload | null>('/api/health', (p) => p, null, 60_000);
 }

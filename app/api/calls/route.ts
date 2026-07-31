@@ -1,61 +1,90 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 
+/**
+ * Call history, newest first.
+ *
+ * The previous version filtered on a `direction` column that does not exist in
+ * call_logs, so any non-"all" filter returned a 500. Every call this system places
+ * is outbound; the meaningful axis is the outcome, so that is what we filter on.
+ */
+
+/** UI filter name -> the call_logs.outcome values it covers. */
+const FILTER_GROUPS: Record<string, string[]> = {
+  connected: ['completed'],
+  missed: ['no_answer', 'busy', 'voicemail'],
+  failed: ['failed', 'cancelled'],
+};
+
+const MAX_LIMIT = 200;
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const direction = searchParams.get('direction');
+    const filter = searchParams.get('filter');
     const outcome = searchParams.get('outcome');
+    const search = searchParams.get('search');
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
-    const page = parseInt(searchParams.get('page') || '1', 10);
-    const limit = parseInt(searchParams.get('limit') || '20', 10);
+    const page = Math.max(parseInt(searchParams.get('page') || '1', 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10) || 20, 1), MAX_LIMIT);
 
     const supabase = createServerClient();
-    
-    // Using a joined query to get lead name and phone
-    let query = supabase
-      .from('call_logs')
-      .select('*, leads (name, phone)', { count: 'exact' });
 
-    if (direction && direction !== 'all') {
-      query = query.eq('direction', direction);
-    }
-    
+    // Joined so the table can show who was called without an N+1 per row.
+    let query = supabase.from('call_logs').select('*, leads (id, name, phone, city)', { count: 'exact' });
+
     if (outcome) {
       query = query.eq('outcome', outcome);
+    } else if (filter && filter !== 'all') {
+      const group = FILTER_GROUPS[filter];
+      if (group) query = query.in('outcome', group);
     }
 
-    if (startDate) {
-      query = query.gte('created_at', startDate);
-    }
-
-    if (endDate) {
-      query = query.lte('created_at', endDate);
-    }
+    if (startDate) query = query.gte('called_at', startDate);
+    if (endDate) query = query.lte('called_at', endDate);
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    query = query.order('created_at', { ascending: false }).range(from, to);
+    // Order by called_at: created_at is when WE recorded the row, which for
+    // reconciled calls can be hours after the call actually happened.
+    query = query.order('called_at', { ascending: false }).range(from, to);
 
     const { data: calls, count, error } = await query;
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error('[calls:GET] query failed', error);
+      return NextResponse.json({ error: 'Failed to load calls.' }, { status: 500 });
     }
 
+    // Lead name/phone live on the joined row, so filtering has to happen after the
+    // fetch. Scoped to the current page, which is what the search box implies.
+    const term = search?.trim().toLowerCase();
+    const rows = term
+      ? (calls ?? []).filter((call: any) =>
+          `${call.leads?.name ?? ''} ${call.leads?.phone ?? ''} ${call.outcome ?? ''}`
+            .toLowerCase()
+            .includes(term),
+        )
+      : (calls ?? []);
+
+    const total = count || 0;
+
     return NextResponse.json({
-      calls,
+      calls: rows,
+      // Both shapes are returned because the dashboard hooks read the flat keys.
+      totalCount: total,
+      totalPages: total ? Math.ceil(total / limit) : 0,
       pagination: {
-        total: count || 0,
+        total,
         page,
         limit,
-        totalPages: count ? Math.ceil(count / limit) : 0
-      }
+        totalPages: total ? Math.ceil(total / limit) : 0,
+      },
     });
   } catch (error: any) {
-    console.error('Error GET /api/calls:', error);
+    console.error('[calls:GET] unexpected', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

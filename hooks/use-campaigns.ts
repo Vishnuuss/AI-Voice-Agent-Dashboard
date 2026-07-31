@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CampaignRun, CampaignStats, DograhCampaignProgress } from '@/types';
-import { usePolling } from './use-polling';
+import { DEFAULT_POLL_MS, useAutoRefresh, usePolling } from './use-polling';
 
 export function useCampaigns() {
   const [campaigns, setCampaigns] = useState<CampaignRun[]>([]);
@@ -47,6 +47,10 @@ export function useCampaigns() {
       }
     };
   }, [fetchCampaigns]);
+
+  // The campaigns route reconciles live status against Dograh on each GET, so this
+  // is also what moves a campaign from "running" to "completed" in the UI.
+  useAutoRefresh(fetchCampaigns, DEFAULT_POLL_MS);
 
   return { campaigns, isLoading, error, refresh: fetchCampaigns };
 }
@@ -96,6 +100,8 @@ export function useCampaignStats() {
       }
     };
   }, [fetchStats]);
+
+  useAutoRefresh(fetchStats, DEFAULT_POLL_MS);
 
   return { stats, isLoading, error, refresh: fetchStats };
 }
@@ -151,22 +157,24 @@ export async function launchCampaign(params: any): Promise<CampaignRun> {
   return data.campaign || data;
 }
 
-export async function pauseCampaign(id: string): Promise<void> {
-  const response = await fetch(`/api/campaigns/${id}/pause`, {
-    method: 'POST',
-  });
+/**
+ * The pause/resume routes return a useful message in `error` (wrong state, provider
+ * rejected, not configured). Throwing `statusText` discarded all of it and the UI
+ * showed a bare "Failed to pause campaign".
+ */
+async function campaignAction(id: string, action: 'pause' | 'resume'): Promise<void> {
+  const response = await fetch(`/api/campaigns/${id}/${action}`, { method: 'POST' });
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(`Failed to pause campaign: ${response.statusText}`);
+    throw new Error(data.error || `Failed to ${action} campaign (${response.status})`);
   }
 }
 
-export async function resumeCampaign(id: string): Promise<void> {
-  const response = await fetch(`/api/campaigns/${id}/resume`, {
-    method: 'POST',
-  });
+export function pauseCampaign(id: string): Promise<void> {
+  return campaignAction(id, 'pause');
+}
 
-  if (!response.ok) {
-    throw new Error(`Failed to resume campaign: ${response.statusText}`);
-  }
+export function resumeCampaign(id: string): Promise<void> {
+  return campaignAction(id, 'resume');
 }

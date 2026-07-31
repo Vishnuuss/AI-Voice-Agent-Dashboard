@@ -36,6 +36,12 @@ export function normaliseOutcome(raw: unknown): CallOutcome {
     case 'error':
     case 'rejected':
       return 'failed';
+    // Dograh reports the outcome as `call_disposition`. A hangup by either side
+    // means the call WAS answered, so it must not fall through to a retry state.
+    case 'user_hangup':
+    case 'bot_hangup':
+    case 'answered':
+      return 'completed';
     case 'voicemail':
     case 'machine':
     case 'answering_machine':
@@ -75,6 +81,14 @@ export interface ScoreInput {
   visit_date?: unknown;
   outcome?: unknown;
   duration?: unknown;
+  /**
+   * Loan-agent signals. The live Telugu workflow extracts loan_type / profession
+   * rather than the real-estate visit_date, so scoring only on the old fields gave
+   * every answered call a flat 10 and marked it `not_qualified`.
+   */
+  loan_type?: unknown;
+  profession?: unknown;
+  do_not_call?: unknown;
 }
 
 export interface ScoreResult {
@@ -102,10 +116,19 @@ export function scoreCall(input: ScoreInput): ScoreResult {
     return { score: 0, qualification: null, outcome, answered, durationSeconds };
   }
 
+  // An explicit do-not-call is a hard disqualification regardless of anything else.
+  if (isTruthyFlag(input.do_not_call)) {
+    return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds };
+  }
+
   let score = 0;
   if (isTruthyFlag(input.interested)) score += 40;
+  // Amount / budget is the strongest secondary signal in both workflows.
   if (isMeaningful(input.budget)) score += 20;
-  if (isMeaningful(input.visit_date)) score += 20;
+  // Either a loan type (loan workflow) or a visit date (property workflow) counts
+  // as "the customer gave us a concrete requirement".
+  if (isMeaningful(input.loan_type) || isMeaningful(input.visit_date)) score += 15;
+  if (isMeaningful(input.profession)) score += 5;
   score += 10; // reached and completed the conversation
   if (durationSeconds >= MIN_CONVERSATION_SECONDS) score += 10;
 

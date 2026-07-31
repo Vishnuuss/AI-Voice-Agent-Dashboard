@@ -3,22 +3,50 @@ import type { NextRequest } from 'next/server'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 
 export async function middleware(request: NextRequest) {
-  // Allow skipping auth during development/testing
+  // SKIP_AUTH disables authentication entirely: every lead record and every
+  // campaign control becomes readable and operable by anyone with the URL.
+  //
+  // It is deliberately still honoured in production while the dashboard is being
+  // brought up, at the owner's explicit request. Each request logs a warning and
+  // /api/health reports it, so this cannot be forgotten about quietly.
+  // TODO: remove SKIP_AUTH from the deployment once a login user exists.
   if (process.env.SKIP_AUTH === 'true') {
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[middleware] SKIP_AUTH=true — this deployment is PUBLIC. Remove it to require login.')
+    }
     return NextResponse.next()
   }
 
   const { pathname } = request.nextUrl
-  
-  // Public paths that don't require authentication
-  const isPublicPath = pathname === '/login' || 
-                       pathname.startsWith('/api/webhook/') ||
-                       pathname.startsWith('/_next/') ||
-                       pathname.includes('/favicon.ico') ||
-                       pathname.match(/\.(png|jpg|jpeg|gif|svg)$/);
-                       
+
+  // Public paths that don't require authentication.
+  // These are exact/prefix matches: `pathname.includes('/favicon.ico')` used to
+  // make any URL containing that substring public.
+  const isPublicPath =
+    pathname === '/login' ||
+    // Authenticated by its own shared secret, and the provider cannot log in.
+    pathname.startsWith('/api/webhook/') ||
+    // Authenticated by CRON_SECRET (Bearer or x-cron-secret).
+    pathname.startsWith('/api/cron/') ||
+    pathname.startsWith('/_next/') ||
+    pathname === '/favicon.ico' ||
+    /\.(png|jpg|jpeg|gif|svg|webp|ico)$/.test(pathname)
+
   if (isPublicPath) {
     return NextResponse.next()
+  }
+
+  // If Supabase is not configured, creating the client throws and Next renders a
+  // 500 with a stack trace on every single page. Fail closed with a clean answer
+  // instead: nobody gets in, and nothing internal leaks.
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('[middleware] Supabase env vars are missing; denying all authenticated traffic.')
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Authentication is not configured' }, { status: 503 })
+    }
+    return NextResponse.redirect(new URL('/login', request.url))
   }
 
   let response = NextResponse.next({
@@ -29,8 +57,8 @@ export async function middleware(request: NextRequest) {
 
   // Create an unauthenticated supabase client to check session
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         get(name: string) {
@@ -74,10 +102,13 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { session } } = await supabase.auth.getSession()
+  // getUser() revalidates the token against Supabase. getSession() only decodes
+  // whatever cookie the browser sent, which a forged cookie can satisfy — so the
+  // previous check could be bypassed without a real session.
+  const { data: { user } } = await supabase.auth.getUser()
 
   // Redirect to login if not authenticated
-  if (!session) {
+  if (!user) {
     // If it's an API request, return 401
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -86,6 +117,13 @@ export async function middleware(request: NextRequest) {
     // Otherwise redirect to login
     return NextResponse.redirect(new URL('/login', request.url))
   }
+
+  // Baseline hardening for authenticated pages: no framing (clickjacking), no MIME
+  // sniffing, and no full URL leaked to third parties via the referrer.
+  response.headers.set('X-Frame-Options', 'DENY')
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
 
   return response
 }

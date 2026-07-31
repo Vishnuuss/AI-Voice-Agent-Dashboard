@@ -1,13 +1,32 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Lead, LeadStats, CallLog } from '@/types';
+import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
 
-export function useLeads(query: string, statusFilter: string, page: number) {
+export interface LeadQuery {
+  /** Comma-separated list of leads.status values. */
+  status?: string;
+  /** 'qualified' | 'not_qualified' - a separate column from status. */
+  qualification?: string;
+  /** Only leads with a follow_up_date set. */
+  followUp?: boolean;
+}
+
+/**
+ * Paginated lead list.
+ *
+ * The totals were previously read from `data.totalCount` while the route returned
+ * `pagination.total`, so the count was always 0 and the pager never rendered.
+ */
+export function useLeads(query: string, filter: LeadQuery, page: number) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Serialised so the callback identity only changes when the filter really does.
+  const filterKey = JSON.stringify(filter ?? {});
 
   const fetchLeads = useCallback(async () => {
     if (abortControllerRef.current) {
@@ -21,9 +40,12 @@ export function useLeads(query: string, statusFilter: string, page: number) {
     setError(null);
 
     try {
+      const parsed: LeadQuery = JSON.parse(filterKey);
       const params = new URLSearchParams();
       if (query) params.set('search', query);
-      if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter);
+      if (parsed.status) params.set('status', parsed.status);
+      if (parsed.qualification) params.set('qualification', parsed.qualification);
+      if (parsed.followUp) params.set('followUp', 'true');
       params.set('page', page.toString());
       params.set('limit', '20');
 
@@ -37,8 +59,8 @@ export function useLeads(query: string, statusFilter: string, page: number) {
 
       const data = await response.json();
       setLeads(data.leads || []);
-      setTotalCount(data.totalCount || 0);
-      setTotalPages(data.totalPages || 0);
+      setTotalCount(data.totalCount ?? data.pagination?.total ?? 0);
+      setTotalPages(data.totalPages ?? data.pagination?.totalPages ?? 0);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setError(err.message || 'An error occurred fetching leads');
@@ -46,7 +68,7 @@ export function useLeads(query: string, statusFilter: string, page: number) {
     } finally {
       setIsLoading(false);
     }
-  }, [query, statusFilter, page]);
+  }, [query, filterKey, page]);
 
   useEffect(() => {
     fetchLeads();
@@ -56,6 +78,8 @@ export function useLeads(query: string, statusFilter: string, page: number) {
       }
     };
   }, [fetchLeads]);
+
+  useAutoRefresh(fetchLeads, DEFAULT_POLL_MS);
 
   return { leads, totalCount, totalPages, isLoading, error, refresh: fetchLeads };
 }
@@ -106,9 +130,17 @@ export function useLeadStats() {
     };
   }, [fetchStats]);
 
+  useAutoRefresh(fetchStats, DEFAULT_POLL_MS);
+
   return { stats, isLoading, error, refresh: fetchStats };
 }
 
+/**
+ * One lead plus its full call history.
+ *
+ * The detail panel used to render a hard-coded empty transcript array, so opening
+ * a lead that had been called showed an empty "Call recording & transcript" box.
+ */
 export function useLead(id: string | null) {
   const [lead, setLead] = useState<Lead | null>(null);
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
@@ -164,4 +196,17 @@ export function useLead(id: string | null) {
   }, [fetchLead]);
 
   return { lead, callHistory, isLoading, error, refresh: fetchLead };
+}
+
+/** Saves an edit from the lead panel (follow-up date, note, status correction). */
+export async function updateLead(id: string, patch: Record<string, any>) {
+  const response = await fetch(`/api/leads/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Failed to update lead (${response.status})`);
+  return data.lead;
 }

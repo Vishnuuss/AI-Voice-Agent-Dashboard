@@ -1,5 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
+import {
+  buildGatheredContext,
+  buildNoteLine,
+  extractCallSignals,
+  parseFollowUpDate,
+  usableMediaUrl,
+} from '@/lib/call-context';
 import type { DograhRunRecord } from '@/types';
 
 const MAX_RETRIES = 2;
@@ -50,13 +57,29 @@ export async function applyRunResult(
 
   if (!lead) return 'no_lead';
 
+  // Same field mapping as the webhook: the loan workflow reports loan_required /
+  // loan_amount / loan_type, not interested / budget / visit_date.
+  const signals = extractCallSignals(run as Record<string, any>);
+
   const result = scoreCall({
-    interested: context.interested,
-    budget: context.budget_confirmed ?? context.budget,
-    visit_date: context.visit_date ?? context.preferred_visit_date,
-    outcome: run.status,
-    duration: run.duration,
+    interested: signals.interested,
+    budget: signals.budget,
+    visit_date: signals.visit_date,
+    loan_type: signals.loan_type,
+    profession: signals.profession,
+    do_not_call: signals.do_not_call,
+    // Dograh run records carry no `status` at all: the outcome lives in
+    // gathered_context.call_disposition ("user_hangup", "no_answer", ...) and
+    // completion is reported via is_completed.
+    outcome:
+      run.status ??
+      context.mapped_call_disposition ??
+      context.call_disposition ??
+      ((run as any).is_completed ? 'completed' : undefined),
+    duration: (run as any).cost_info?.call_duration_seconds ?? run.duration,
   });
+
+  const gatheredContext = { ...context, ...buildGatheredContext(signals, result.outcome) };
 
   const nextRetryCount = (lead.retry_count ?? 0) + 1;
   const calledAt = run.created_at ?? run.started_at ?? new Date().toISOString();
@@ -68,10 +91,13 @@ export async function applyRunResult(
     attempt_no: nextRetryCount,
     outcome: result.outcome,
     duration: result.durationSeconds,
-    recording_url: run.recording_url ?? null,
-    transcript_url: run.transcript_url ?? null,
-    gathered_context: context,
-    cost_info: run.cost_info ?? {},
+    // Dograh's run records carry storage keys ("recordings/23.wav") in these
+    // fields and only a real link in the *_public_url variants, so prefer those
+    // and discard anything that is not fetchable.
+    recording_url: usableMediaUrl((run as any).recording_public_url) ?? usableMediaUrl(run.recording_url),
+    transcript_url: usableMediaUrl((run as any).transcript_public_url) ?? usableMediaUrl(run.transcript_url),
+    gathered_context: gatheredContext,
+    cost_info: (run as any).cost_info ?? {},
     called_at: calledAt,
   });
 
@@ -81,14 +107,12 @@ export async function applyRunResult(
     return 'error';
   }
 
-  const noteLine = [
-    `[reconciled ${new Date().toISOString().slice(0, 16).replace('T', ' ')}]`,
-    `attempt ${nextRetryCount}`,
-    `outcome: ${result.outcome}`,
-    run.summary ? String(run.summary) : null,
-  ]
-    .filter(Boolean)
-    .join(' | ');
+  const noteLine = buildNoteLine(signals, {
+    prefix: `[reconciled ${new Date().toISOString().slice(0, 16).replace('T', ' ')}]`,
+    attempt: nextRetryCount,
+    outcome: result.outcome,
+    score: result.answered ? result.score : null,
+  });
 
   const update: Record<string, any> = {
     status: leadStatusFor(result.outcome, nextRetryCount, MAX_RETRIES),
@@ -101,9 +125,16 @@ export async function applyRunResult(
   if (result.answered) {
     update.score = result.score;
     update.qualification = result.qualification;
-    update.qual_data = context;
-    if (run.recording_url) update.recording_url = run.recording_url;
-    if (run.transcript_url) update.transcript_url = run.transcript_url;
+    update.qual_data = gatheredContext;
+    const recording = usableMediaUrl((run as any).recording_public_url) ?? usableMediaUrl(run.recording_url);
+    const transcript = usableMediaUrl((run as any).transcript_public_url) ?? usableMediaUrl(run.transcript_url);
+    if (recording) update.recording_url = recording;
+    if (transcript) update.transcript_url = transcript;
+    if (signals.budget) update.budget = signals.budget;
+    if (signals.loan_type) update.property_type = signals.loan_type;
+
+    const followUp = parseFollowUpDate(signals.visit_date);
+    if (followUp) update.follow_up_date = followUp;
   }
 
   const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id);

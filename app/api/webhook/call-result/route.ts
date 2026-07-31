@@ -2,12 +2,22 @@ import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { createServerClient } from '@/lib/supabase-server';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
-import type { WebhookPayload } from '@/types';
+import {
+  buildGatheredContext,
+  buildNoteLine,
+  cleanNumber,
+  cleanString,
+  extractCallSignals,
+  flattenPayload,
+  parseFollowUpDate,
+  usableMediaUrl,
+} from '@/lib/call-context';
 
 /**
  * PUBLIC endpoint - receives call results from Dograh after each call ends.
  *
- * Auth:        X-API-Key or X-Webhook-Secret must equal DOGRAH_WEBHOOK_SECRET.
+ * Auth:        X-API-Key, X-Webhook-Secret or Authorization: Bearer must equal
+ *              DOGRAH_WEBHOOK_SECRET.
  * Idempotency: enforced on dograh_run_id. A duplicate delivery never re-scores a
  *              lead or re-increments retry_count.
  *
@@ -18,60 +28,6 @@ import type { WebhookPayload } from '@/types';
 const MAX_RETRIES = 2;
 const MAX_NOTES_LENGTH = 2_000;
 
-/** Values a Jinja template produces for a variable that did not resolve. */
-const PLACEHOLDER_VALUES = new Set(['', 'none', 'null', 'undefined', 'nan', 'n/a', '{}', '[]']);
-
-/** "" / "None" / "Undefined" -> null; otherwise the trimmed string. */
-function cleanString(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  const s = String(value).trim();
-  return PLACEHOLDER_VALUES.has(s.toLowerCase()) ? null : s;
-}
-
-/** Accepts 6, "6" or "" and returns a number or null - never NaN. */
-function cleanNumber(value: unknown): number | null {
-  const s = cleanString(value);
-  if (s === null) return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-/**
- * Jinja renders Python's True/False capitalised, and an unset variable as "".
- * Anything unrecognised stays null so scoreCall() treats it as "no signal"
- * rather than a definite "not interested".
- */
-function cleanBoolean(value: unknown): boolean | null {
-  const s = cleanString(value);
-  if (s === null) return null;
-  const v = s.toLowerCase();
-  if (['true', 'yes', '1', 'interested', 'y'].includes(v)) return true;
-  if (['false', 'no', '0', 'not_interested', 'n'].includes(v)) return false;
-  return null;
-}
-
-function normaliseWebhookPayload(raw: Record<string, any>): WebhookPayload & Record<string, any> {
-  return {
-    ...raw,
-    run_id: cleanNumber(raw.run_id ?? raw.workflow_run_id ?? raw.call_id) as number,
-    campaign_id: cleanNumber(raw.campaign_id) as number,
-    lead_id: cleanString(raw.lead_id) as string,
-    phone: cleanString(raw.phone ?? raw.phone_number) as string,
-    customer_name: cleanString(raw.customer_name),
-    outcome: cleanString(raw.outcome) ?? 'completed',
-    interested: cleanBoolean(raw.interested),
-    budget: cleanString(raw.budget),
-    visit_date: cleanString(raw.visit_date),
-    notes: cleanString(raw.notes),
-    // Prefer the public URL variants - the plain ones require an authenticated
-    // session, so the dashboard cannot play them back for the client.
-    recording: cleanString(raw.recording_public_url ?? raw.recording ?? raw.recording_url),
-    transcript: cleanString(raw.transcript_public_url ?? raw.transcript ?? raw.transcript_url),
-    call_time: cleanString(raw.call_time) as string,
-    duration: cleanNumber(raw.duration ?? raw.call_duration_seconds) ?? 0,
-  };
-}
-
 /** Constant-time comparison so the secret cannot be recovered by timing the response. */
 function secretMatches(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -79,6 +35,13 @@ function secretMatches(provided: string | null, expected: string): boolean {
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+/** Dograh can be configured with any of these header styles; accept all three. */
+function presentedSecret(request: Request): string | null {
+  const auth = request.headers.get('authorization');
+  const bearer = auth?.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : null;
+  return request.headers.get('x-api-key') ?? request.headers.get('x-webhook-secret') ?? bearer;
 }
 
 export async function POST(request: Request) {
@@ -91,8 +54,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Webhook not configured' }, { status: 503 });
     }
 
-    const provided = request.headers.get('x-api-key') ?? request.headers.get('x-webhook-secret');
-    if (!secretMatches(provided, expectedSecret)) {
+    if (!secretMatches(presentedSecret(request), expectedSecret)) {
       // Never log any portion of the presented credential.
       console.warn('[webhook] rejected delivery: invalid secret');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -105,13 +67,38 @@ export async function POST(request: Request) {
 
     // Dograh renders its payload from a Jinja template, which means every value
     // arrives as a string and an unresolved variable arrives as "", "None" or
-    // "Undefined" rather than being omitted. Normalise before use so a missing
-    // recording does not get stored as the literal string "None", and so
-    // run_id survives as the number the bigint column and dedup check expect.
-    const payload = normaliseWebhookPayload(raw);
+    // "Undefined" rather than being omitted - and the extracted variables may sit
+    // flat on the payload or nested under gathered_context. flattenPayload +
+    // extractCallSignals handle every one of those shapes.
+    const flat = flattenPayload(raw);
+    const signals = extractCallSignals(raw);
+
+    const runId = cleanNumber(flat.run_id ?? flat.workflow_run_id ?? flat.call_id ?? flat.id);
+    const phone = cleanString(flat.phone ?? flat.phone_number ?? flat.to_number ?? flat.customer_phone);
+    const leadIdFromPayload = cleanString(flat.lead_id ?? flat.external_id);
+    // Dograh's template maps `outcome` to gathered_context.call_disposition; keep
+    // the other spellings as fallbacks for manual/legacy deliveries.
+    const outcomeRaw =
+      cleanString(
+        flat.outcome ??
+          flat.call_disposition ??
+          flat.mapped_call_disposition ??
+          flat.status ??
+          flat.call_status,
+      ) ?? 'completed';
+    const durationRaw =
+      cleanNumber(flat.duration ?? flat.call_duration_seconds ?? flat.call_duration) ??
+      cleanNumber(raw?.cost_info?.call_duration_seconds) ??
+      0;
+    // Prefer the public URL variants - the plain ones require an authenticated
+    // session, so the dashboard cannot play them back for the client. Anything
+    // that is not an absolute link (Dograh sends storage keys like
+    // "recordings/23.wav") is dropped rather than stored as a dead link.
+    const recording = usableMediaUrl(flat.recording_public_url ?? flat.recording ?? flat.recording_url);
+    const transcript = usableMediaUrl(flat.transcript_public_url ?? flat.transcript ?? flat.transcript_url);
+    const callTime = cleanString(flat.call_time ?? flat.ended_at ?? flat.created_at);
 
     const supabase = createServerClient();
-    const runId = payload.run_id ?? null;
 
     // --- Idempotency pre-check -------------------------------------------
     if (runId) {
@@ -129,19 +116,33 @@ export async function POST(request: Request) {
     // --- Resolve the lead -------------------------------------------------
     let lead: any = null;
 
-    if (payload.lead_id) {
-      const { data } = await supabase.from('leads').select('*').eq('id', payload.lead_id).maybeSingle();
+    if (leadIdFromPayload) {
+      const { data } = await supabase.from('leads').select('*').eq('id', leadIdFromPayload).maybeSingle();
       lead = data;
     }
-    if (!lead && payload.phone) {
+    if (!lead && phone) {
       // Phone is not guaranteed unique, so take the most recently contacted match.
-      const { data } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('phone', payload.phone)
-        .order('last_attempt_at', { ascending: false, nullsFirst: false })
-        .limit(1);
-      lead = data?.[0] ?? null;
+      // Also try the bare 10-digit form: the CSV stores +91XXXXXXXXXX but some
+      // providers report the number back without the country code.
+      const candidates = [phone];
+      const digits = phone.replace(/\D/g, '');
+      if (digits.length >= 10) {
+        const last10 = digits.slice(-10);
+        candidates.push(last10, `+91${last10}`, `91${last10}`);
+      }
+
+      for (const candidate of candidates) {
+        const { data } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('phone', candidate)
+          .order('last_attempt_at', { ascending: false, nullsFirst: false })
+          .limit(1);
+        if (data?.[0]) {
+          lead = data[0];
+          break;
+        }
+      }
     }
 
     if (!lead) {
@@ -152,22 +153,18 @@ export async function POST(request: Request) {
 
     // --- Score the call ---------------------------------------------------
     const result = scoreCall({
-      interested: payload.interested,
-      budget: payload.budget,
-      visit_date: payload.visit_date,
-      outcome: payload.outcome,
-      duration: (payload as any).duration ?? (payload as any).call_duration,
+      interested: signals.interested,
+      budget: signals.budget,
+      visit_date: signals.visit_date,
+      loan_type: signals.loan_type,
+      profession: signals.profession,
+      do_not_call: signals.do_not_call,
+      outcome: outcomeRaw,
+      duration: durationRaw,
     });
 
-    const gatheredContext: Record<string, any> = {};
-    if (payload.interested !== null && payload.interested !== undefined)
-      gatheredContext.interested = payload.interested;
-    if (payload.budget) gatheredContext.budget_confirmed = payload.budget;
-    if (payload.visit_date) gatheredContext.preferred_visit_date = payload.visit_date;
-    gatheredContext.call_outcome = result.outcome;
-    if (payload.notes) gatheredContext.call_notes = payload.notes;
-
-    const calledAt = payload.call_time ?? new Date().toISOString();
+    const gatheredContext = buildGatheredContext(signals, result.outcome);
+    const calledAt = callTime ?? new Date().toISOString();
     const nextRetryCount = (lead.retry_count ?? 0) + 1;
 
     // --- Insert the call log ----------------------------------------------
@@ -181,10 +178,10 @@ export async function POST(request: Request) {
       attempt_no: nextRetryCount,
       outcome: result.outcome,
       duration: result.durationSeconds,
-      recording_url: payload.recording ?? null,
-      transcript_url: payload.transcript ?? null,
+      recording_url: recording,
+      transcript_url: transcript,
       gathered_context: gatheredContext,
-      cost_info: (payload as any).cost_info ?? {},
+      cost_info: raw?.cost_info ?? {},
       called_at: calledAt,
     });
 
@@ -201,17 +198,12 @@ export async function POST(request: Request) {
     const status = leadStatusFor(result.outcome, nextRetryCount, MAX_RETRIES);
 
     // Append-only notes previously grew without bound across retries.
-    const noteLine = [
-      `[${new Date(calledAt).toISOString().slice(0, 16).replace('T', ' ')}]`,
-      `attempt ${nextRetryCount}`,
-      `outcome: ${result.outcome}`,
-      result.answered ? `score: ${result.score}` : null,
-      payload.budget ? `budget: ${payload.budget}` : null,
-      payload.visit_date ? `visit: ${payload.visit_date}` : null,
-      payload.notes ? String(payload.notes) : null,
-    ]
-      .filter(Boolean)
-      .join(' | ');
+    const noteLine = buildNoteLine(signals, {
+      prefix: `[${new Date(calledAt).toISOString().slice(0, 16).replace('T', ' ')}]`,
+      attempt: nextRetryCount,
+      outcome: result.outcome,
+      score: result.answered ? result.score : null,
+    });
 
     const notes = [lead.notes, noteLine].filter(Boolean).join('\n').slice(-MAX_NOTES_LENGTH);
 
@@ -229,8 +221,16 @@ export async function POST(request: Request) {
       update.score = result.score;
       update.qualification = result.qualification;
       update.qual_data = gatheredContext;
-      if (payload.recording) update.recording_url = payload.recording;
-      if (payload.transcript) update.transcript_url = payload.transcript;
+      if (recording) update.recording_url = recording;
+      if (transcript) update.transcript_url = transcript;
+      if (signals.budget) update.budget = signals.budget;
+      if (signals.loan_type) update.property_type = signals.loan_type;
+      if (signals.customer_name && !lead.name) update.name = signals.customer_name;
+
+      // The Follow-ups page reads leads.follow_up_date; nothing used to set it, so
+      // that page was permanently empty even after a customer asked for a callback.
+      const followUp = parseFollowUpDate(signals.visit_date);
+      if (followUp) update.follow_up_date = followUp;
     }
 
     const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id);
@@ -253,4 +253,17 @@ export async function POST(request: Request) {
     console.error('[webhook] unexpected error', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
+}
+
+/**
+ * Convenience probe so you can confirm from a browser that the endpoint is
+ * deployed and configured, without exposing whether any given secret is correct.
+ */
+export async function GET() {
+  return NextResponse.json({
+    endpoint: 'dograh call-result webhook',
+    method: 'POST',
+    configured: Boolean(process.env.DOGRAH_WEBHOOK_SECRET),
+    accepted_headers: ['X-API-Key', 'X-Webhook-Secret', 'Authorization: Bearer'],
+  });
 }

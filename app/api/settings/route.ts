@@ -25,13 +25,29 @@ export async function GET() {
   }
 }
 
-export async function PUT(request: Request) {
-  try {
-    const body = await request.json();
-    const { key, value } = body;
+/** Whitelisted so a caller cannot fill the table with arbitrary keys. */
+// `ai_agent` (not `agent`) is the key already present in the settings table.
+const ALLOWED_KEYS = new Set([
+  'workspace',
+  'ai_agent',
+  'notifications',
+  'appearance',
+  'call_behavior',
+]);
 
-    if (!key) {
+async function upsertSetting(request: Request) {
+  try {
+    const body = await request.json().catch(() => null);
+    const { key, value } = (body ?? {}) as { key?: string; value?: unknown };
+
+    if (!key || typeof key !== 'string') {
       return NextResponse.json({ error: 'Key is required' }, { status: 400 });
+    }
+    if (!ALLOWED_KEYS.has(key)) {
+      return NextResponse.json(
+        { error: `Unknown setting "${key}". Allowed: ${[...ALLOWED_KEYS].join(', ')}` },
+        { status: 400 },
+      );
     }
 
     const supabase = createServerClient();
@@ -43,12 +59,18 @@ export async function PUT(request: Request) {
       .single();
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error('[settings] upsert failed', error);
+      return NextResponse.json({ error: 'Failed to save the setting.' }, { status: 500 });
     }
 
-    return NextResponse.json({ setting: data });
+    return NextResponse.json({ setting: data, success: true });
   } catch (error: any) {
-    console.error('Error PUT /api/settings:', error);
+    console.error('[settings] unexpected', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
+
+// The settings hook POSTs; the original route only exported PUT, so every "Save"
+// button in the UI got a 405 and the toast lied about having saved.
+export const PUT = upsertSetting;
+export const POST = upsertSetting;
