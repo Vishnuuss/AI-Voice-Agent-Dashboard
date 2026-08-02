@@ -468,6 +468,70 @@ function MarginPanel({ economics }: { economics: any }) {
         </CardContent>
       </Card>
 
+      {/* Raw units, for checking against provider invoices. */}
+      <Card className="shadow-paper">
+        <CardHeader>
+          <CardTitle className="font-display">Check against your invoices</CardTitle>
+          <CardDescription>
+            What each provider should be billing you for. None of them expose a billing API we
+            can read, so this is how you verify: compare these counts with the invoice.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider</TableHead>
+                <TableHead>They bill on</TableHead>
+                <TableHead className="text-right">We measured</TableHead>
+                <TableHead className="text-right">Our estimate</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[
+                {
+                  who: 'Vobiz',
+                  unit: 'whole minutes',
+                  measured: `${(economics.measured_usage?.telephony_billed_minutes ?? 0).toLocaleString('en-IN')} min`,
+                  cost: economics.cost.by_provider.telephony ?? 0,
+                },
+                {
+                  who: 'Groq',
+                  unit: 'tokens in / out',
+                  measured: `${(economics.measured_usage?.llm_input_tokens ?? 0).toLocaleString('en-IN')} / ${(economics.measured_usage?.llm_output_tokens ?? 0).toLocaleString('en-IN')}`,
+                  cost: economics.cost.by_provider.llm ?? 0,
+                },
+                {
+                  who: 'Cartesia',
+                  unit: 'characters spoken',
+                  measured: `${(economics.measured_usage?.tts_characters ?? 0).toLocaleString('en-IN')} chars`,
+                  cost: economics.cost.by_provider.tts ?? 0,
+                },
+                {
+                  who: 'Deepgram',
+                  unit: 'audio minutes',
+                  measured: `${economics.measured_usage?.stt_minutes ?? 0} min`,
+                  cost: economics.cost.by_provider.stt ?? 0,
+                },
+              ].map((r) => (
+                <TableRow key={r.who}>
+                  <TableCell className="font-medium">{r.who}</TableCell>
+                  <TableCell className="text-muted-foreground">{r.unit}</TableCell>
+                  <TableCell className="text-right tabular-nums">{r.measured}</TableCell>
+                  <TableCell className="text-right tabular-nums">{rs(r.cost)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <p className="mt-3 text-xs text-muted-foreground">
+            The measured column is counted from the calls themselves and is exact. The estimate
+            is that count multiplied by your rate card — so it is only as right as the rates you
+            entered. Put your real contracted rates in the Pricing tab and these become your
+            actual spend.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* What to actually do about it. */}
       <Card className="shadow-paper">
         <CardHeader>
@@ -573,9 +637,22 @@ function PricingPanel({ account, onSaved }: { account: any; onSaved: () => void 
   const [rate, setRate] = useState(String((account.rate_milli_per_minute ?? 4000) / 1000));
   const [upi, setUpi] = useState(account.payment_instructions?.upi_id ?? '');
   const [qr, setQr] = useState(account.payment_instructions?.qr_image_url ?? '');
+  const [rateCard, setRateCard] = useState(JSON.stringify(account.rate_card ?? {}, null, 2));
+  const [rateCardError, setRateCardError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function save() {
+    // Parse before touching the network: a typo here would otherwise be saved
+    // as a broken rate card and quietly make every margin figure wrong.
+    let parsedRateCard: any;
+    try {
+      parsedRateCard = JSON.parse(rateCard);
+      setRateCardError(null);
+    } catch (err: any) {
+      setRateCardError('That is not valid JSON — check for a missing comma or bracket.');
+      return;
+    }
+
     setBusy(true);
     try {
       await opFetch('/api/operator/settings', {
@@ -583,6 +660,7 @@ function PricingPanel({ account, onSaved }: { account: any; onSaved: () => void 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rate_milli_per_minute: Math.round(Number(rate) * 1000),
+          rate_card: parsedRateCard,
           payment_instructions: {
             ...(account.payment_instructions ?? {}),
             upi_id: upi.trim(),
@@ -632,6 +710,26 @@ function PricingPanel({ account, onSaved }: { account: any; onSaved: () => void 
           // eslint-disable-next-line @next/next/no-img-element
           <img src={qr} alt="QR preview" className="size-32 rounded-md border border-border object-contain" />
         )}
+        <div className="space-y-1.5 border-t border-border pt-4">
+          <label htmlFor="ratecard" className="text-sm font-medium">
+            What you pay your providers
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Put your REAL contracted rates here — your Vobiz per-minute price, and the
+            published rates from Groq, Cartesia and Deepgram. The margin figures are only as
+            accurate as these numbers, because no provider gives us a billing API to read.
+          </p>
+          <textarea
+            id="ratecard"
+            value={rateCard}
+            onChange={(e) => setRateCard(e.target.value)}
+            spellCheck={false}
+            rows={14}
+            className="w-full rounded-lg border border-input bg-muted/30 p-3 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+          {rateCardError && <p className="text-xs text-destructive">{rateCardError}</p>}
+        </div>
+
         <Button onClick={save} disabled={busy}>
           {busy && <Loader2 data-icon="inline-start" className="animate-spin" />}
           Save

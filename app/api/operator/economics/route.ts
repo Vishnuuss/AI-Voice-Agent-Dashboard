@@ -66,6 +66,19 @@ export async function GET(request: Request) {
       llm: new Set(), tts: new Set(), stt: new Set(), telephony: new Set(),
     };
 
+    // Raw units, as each provider counts them. This is the only honest way to
+    // check what we are actually being charged: no provider here exposes a
+    // billing API we can read (Dograh reports no money at all on a self-hosted
+    // instance, and Vobiz only ever calls us), so reconciliation means holding
+    // these totals up against the invoice each provider sends.
+    const measured = {
+      talk_seconds: 0,
+      telephony_billed_seconds: 0,
+      llm_input_tokens: 0,
+      llm_output_tokens: 0,
+      tts_characters: 0,
+    };
+
     for (const raw of rows) {
       const call = raw as MeteredCall;
       if (!isBillableCall(call).billable) { testCalls += 1; continue; }
@@ -79,6 +92,11 @@ export async function GET(request: Request) {
 
       if (call.call_mode) modelsInUse.telephony.add(call.call_mode);
 
+      // The carrier bills whole minutes, so this is what Vobiz should invoice —
+      // NOT the raw talk time, which is always lower.
+      measured.talk_seconds += Number(call.duration_seconds) || 0;
+      measured.telephony_billed_seconds += secs;
+
       let cost = 0;
       if (call.usage_info) {
         // Keys look like "GroqLLMService#7|||llama-3.3-70b-versatile".
@@ -87,6 +105,16 @@ export async function GET(request: Request) {
             const model = key.split('|||')[1];
             if (model) modelsInUse[kind].add(model);
           }
+        }
+
+        for (const v of Object.values((call.usage_info as any).llm ?? {})) {
+          if (v && typeof v === 'object') {
+            measured.llm_input_tokens += Number((v as any).prompt_tokens) || 0;
+            measured.llm_output_tokens += Number((v as any).completion_tokens) || 0;
+          }
+        }
+        for (const v of Object.values((call.usage_info as any).tts ?? {})) {
+          measured.tts_characters += Number(v) || 0;
         }
 
         const c = estimateProviderCost(call, config.rateCard);
@@ -176,6 +204,19 @@ export async function GET(request: Request) {
       models_in_use: Object.fromEntries(
         Object.entries(modelsInUse).map(([k, v]) => [k, [...v]]),
       ),
+      // Hold these against each provider's invoice. They are counted, not
+      // estimated — the estimate only enters when they are multiplied by the
+      // rate card.
+      measured_usage: {
+        talk_minutes: Math.round((measured.talk_seconds / 60) * 10) / 10,
+        telephony_billed_minutes: Math.round(measured.telephony_billed_seconds / 60),
+        llm_input_tokens: measured.llm_input_tokens,
+        llm_output_tokens: measured.llm_output_tokens,
+        tts_characters: measured.tts_characters,
+        // Deepgram bills on audio length and reports nothing back to us, so the
+        // only figure we can offer is the talk time it processed.
+        stt_minutes: Math.round((measured.talk_seconds / 60) * 10) / 10,
+      },
       rate_card: config.rateCard,
     });
   } catch (err: any) {
