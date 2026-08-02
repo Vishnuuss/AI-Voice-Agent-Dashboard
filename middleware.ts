@@ -28,6 +28,16 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/webhook/') ||
     // Authenticated by CRON_SECRET (Bearer or x-cron-secret).
     pathname.startsWith('/api/cron/') ||
+    // The operator console authenticates itself with OPERATOR_KEY, checked in
+    // the page and in every /api/operator route via isAuthorisedOperator().
+    //
+    // It is handled there rather than here on purpose: SKIP_AUTH returns early
+    // at the top of this file, so a middleware-only gate would leave the
+    // console wide open for as long as that flag is set. It is also the wrong
+    // runtime — middleware runs on the Edge, where node:crypto HMAC is not
+    // available. Unauthorised requests get 404, never 401.
+    pathname.startsWith('/operator') ||
+    pathname.startsWith('/api/operator/') ||
     pathname.startsWith('/_next/') ||
     pathname === '/favicon.ico' ||
     /\.(png|jpg|jpeg|gif|svg|webp|ico)$/.test(pathname)

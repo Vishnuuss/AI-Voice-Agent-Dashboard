@@ -282,6 +282,21 @@ export class DograhClient {
     });
   }
 
+  /**
+   * A single run, in full.
+   *
+   * The campaign-runs LIST returns `usage_info: null` even for finished calls;
+   * only this per-run fetch populates it with the LLM token counts and TTS
+   * character counts that provider cost is computed from. Verified on run 17,
+   * fetched both ways a minute apart.
+   *
+   * Billing itself does not need this — duration is present in the list — so
+   * it is used only to enrich the operator margin view, in the background.
+   */
+  async getWorkflowRun(workflowId: number, runId: number): Promise<any> {
+    return this.request<any>(`/api/v1/workflow/${workflowId}/runs/${runId}`);
+  }
+
   /** Promotes the current draft to the live version callers actually get. */
   async publishWorkflow(workflowId: number): Promise<any> {
     return this.request<any>(`/api/v1/workflow/${workflowId}/publish`, {

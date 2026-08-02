@@ -48,22 +48,14 @@ export function BsWealthLockup({
  */
 export function BsWealthLockupInline({ className }: { className?: string }) {
   return (
-    <div className={cn("flex flex-col items-center leading-none select-none", className)}>
-      {/* Each initial sits directly above its own word, and the word's tracking
-          is tuned so the two blocks share the same optical width — that shared
-          measure is what makes a stacked lockup read as one mark instead of
-          four loose lines. */}
-      <span className="font-display text-[22px] font-semibold leading-none tracking-tight text-primary">
-        B
+    <div className={cn("flex flex-col leading-none select-none", className)}>
+      {/* Compact two-line mark: monogram over descriptor, tracked so both
+          lines finish on roughly the same measure. */}
+      <span className="font-display text-[20px] font-semibold leading-none tracking-[0.06em] text-primary">
+        BS
       </span>
-      <span className="mt-1 text-[9px] font-semibold leading-none tracking-[0.2em] text-sidebar-foreground uppercase">
-        Wealth
-      </span>
-      <span className="font-display mt-2 text-[22px] font-semibold leading-none tracking-tight text-primary">
-        S
-      </span>
-      <span className="mt-1 text-[9px] font-semibold leading-none tracking-[0.2em] text-sidebar-foreground uppercase">
-        Finance
+      <span className="mt-1.5 text-[8.5px] font-semibold leading-none tracking-[0.18em] text-sidebar-foreground uppercase">
+        Wealth Finance
       </span>
     </div>
   )

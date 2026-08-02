@@ -1,6 +1,7 @@
 import { Analytics } from "@vercel/analytics/next"
 import type { Metadata, Viewport } from "next"
 import { Bodoni_Moda, Geist_Mono, Outfit } from "next/font/google"
+import { Toaster } from "@/components/ui/sonner"
 import "./globals.css"
 
 /**
@@ -48,6 +49,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         className={`${outfit.variable} ${bodoni.variable} ${geistMono.variable} font-sans antialiased`}
       >
         {children}
+        {/* toast() is called throughout the dashboard, but nothing rendered the
+            surface it draws on, so every one of those notifications was silent.
+            The credits flow leans on it for "out of credits" and "top-up
+            received", so it has to actually appear. */}
+        <Toaster />
         {process.env.NODE_ENV === "production" && <Analytics />}
       </body>
     </html>

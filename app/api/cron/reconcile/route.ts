@@ -4,6 +4,10 @@ import { getMaxRetries } from '@/lib/call-behavior';
 import { DograhClient, dograh } from '@/lib/dograh';
 import { applyRunResult, isAuthorisedCron } from '@/lib/reconcile';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
+import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
+import { getBillingConfig, sweepUnbilledCalls } from '@/lib/billing';
+import { meterAllCampaigns, enrichUsageInfo } from '@/lib/billing-meter';
+import { enforceBalanceGuard } from '@/lib/billing-guard';
 
 /**
  * Reconciles our database against Dograh, recovering anything a missed webhook lost.
@@ -118,11 +122,50 @@ async function handler(request: Request) {
 
     const releasedLeads = await releaseStuckLeads(supabase);
 
+    // --- Billing ------------------------------------------------------------
+    // Meter from Dograh (not from call_logs — the client can edit that), charge
+    // anything unbilled, then stop the calling if the balance has run out.
+    //
+    // Every step is non-fatal: reconciliation is the job that keeps call data
+    // correct, and it must not start failing because our accounting had a bad
+    // minute. The sweep is idempotent, so anything skipped is picked up next tick.
+    const billingReport: Record<string, unknown> = {};
+    if (isBillingConfigured()) {
+      try {
+        const billing = createBillingClient();
+        const config = await getBillingConfig(billing);
+
+        const metered = await meterAllCampaigns(billing, {
+          sinceIso: new Date(Date.now() - 7 * 86_400_000).toISOString(),
+        });
+        const swept = await sweepUnbilledCalls(billing, config);
+
+        // Re-read: the sweep just moved the balance.
+        const after = await getBillingConfig(billing);
+        const guard = await enforceBalanceGuard(supabase, after, after.balanceMilli);
+
+        // Bounded per tick — this is one HTTP call per run and only feeds the
+        // operator margin view, so it must never dominate the job.
+        const enriched = await enrichUsageInfo(billing, { limit: 15 });
+
+        billingReport.metered = metered.inserted;
+        billingReport.billed = swept.billed;
+        billingReport.credits_charged = swept.creditsCharged;
+        billingReport.balance_credits = Math.round(after.balanceMilli / 1000);
+        billingReport.campaigns_paused = guard.paused.length;
+        billingReport.usage_enriched = enriched.enriched;
+      } catch (billingError: any) {
+        console.error('[cron:reconcile] billing step failed', billingError?.message);
+        billingReport.error = 'billing step failed';
+      }
+    }
+
     return NextResponse.json({
       success: true,
       campaigns_checked: campaigns?.length ?? 0,
       ...totals,
       released_stuck_leads: releasedLeads,
+      billing: billingReport,
     });
   } catch (error) {
     console.error('[cron:reconcile] unexpected', error);

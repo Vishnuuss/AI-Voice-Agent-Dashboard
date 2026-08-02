@@ -190,9 +190,24 @@ export interface CampaignStats {
   total_qualified: number;
 }
 
+/**
+ * Mirrors what /api/calls/stats actually returns. It previously listed only
+ * four of the ten fields, so every consumer fell back to `any` and lost type
+ * safety on the rest.
+ *
+ * All durations are SECONDS. `total_talk_time` sums only connected calls and is
+ * the basis for billed minutes.
+ */
 export interface CallStats {
   total: number;
   connected: number;
   missed: number;
+  failed: number;
+  today: number;
   avg_duration: number;
+  /** Legacy camelCase alias of avg_duration, still read by older callers. */
+  avgDuration: number;
+  total_talk_time: number;
+  connect_rate: number;
+  by_outcome: Record<string, number>;
 }

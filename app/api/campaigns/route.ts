@@ -5,6 +5,8 @@ import { buildCampaignCsv } from '@/lib/csv-builder';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
 import { applyLeadSegmentFilter, isValidLeadSegment, segmentNoEligibleLeadsMessage, type LeadSegment } from '@/lib/lead-segments';
 import { getCallBehaviorSettings } from '@/lib/call-behavior';
+import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
+import { getBillingConfig, toCredits } from '@/lib/billing';
 
 /** Statuses that mean "a launch for this name is already in flight". */
 const IN_FLIGHT = ['pending', 'queued', 'running', 'paused'];
@@ -71,6 +73,11 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Set by the credit pre-flight when the balance will not cover the whole
+  // campaign. Not an error — the campaign runs and auto-pauses when it runs out
+  // — so it rides along on the success response instead of blocking.
+  let preflightWarning: string | null = null;
+
   if (!DograhClient.isConfigured()) {
     return NextResponse.json(
       { error: 'Calling provider is not configured. Set DOGRAH_API_KEY to launch campaigns.' },
@@ -142,6 +149,43 @@ export async function POST(request: Request) {
             { status: 400 },
           );
         }
+      }
+    }
+
+    // --- Credit pre-flight -------------------------------------------------
+    // Checked here, before anything is reserved or uploaded, so a refusal needs
+    // no compensating rollback. Billing failures are non-fatal: if the billing
+    // database is unreachable we let the campaign run rather than blocking the
+    // client's operations over our own accounting outage.
+    if (isBillingConfigured()) {
+      try {
+        const billing = createBillingClient();
+        const billingConfig = await getBillingConfig(billing);
+        const balance = billingConfig.balanceMilli;
+
+        if (balance <= 0) {
+          return NextResponse.json(
+            {
+              error: 'Out of credits. Add credits before starting a campaign.',
+              code: 'INSUFFICIENT_CREDITS',
+              balance_credits: toCredits(balance),
+            },
+            { status: 402 },
+          );
+        }
+
+        // One minute per call is the honest planning figure: every connected
+        // call bills at least a full minute, and most of ours land under one.
+        const estimatedMilli = requestedCount * billingConfig.rateMilliPerMinute;
+        if (balance < estimatedMilli) {
+          const affordable = Math.floor(balance / billingConfig.rateMilliPerMinute);
+          preflightWarning =
+            `This campaign could use about ${toCredits(estimatedMilli).toLocaleString('en-IN')} credits ` +
+            `but you have ${toCredits(balance).toLocaleString('en-IN')}. ` +
+            `Calling will pause automatically after roughly ${affordable} calls.`;
+        }
+      } catch (billingError: any) {
+        console.error('[campaigns] credit pre-flight failed, allowing launch', billingError?.message);
       }
     }
 
@@ -334,6 +378,7 @@ export async function POST(request: Request) {
       leads_queued: claimedLeadIds.length,
       leads_requested: requestedCount,
       dograh_campaign_id: dograhCampaignId,
+      ...(preflightWarning ? { warnings: [preflightWarning] } : {}),
     });
   } catch (error: any) {
     console.error('[campaigns:POST] launch failed', error);

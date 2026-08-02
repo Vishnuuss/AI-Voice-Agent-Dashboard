@@ -79,8 +79,13 @@ export function useOverview(range = 7) {
   return { data, isLoading, error, refresh: fetchOverview };
 }
 
-/** Minimal JSON GET with abort + auto-refresh, used by the report panels. */
-function useJson<T>(url: string, pick: (payload: any) => T, initial: T, pollMs = 60_000) {
+/**
+ * Minimal JSON GET with abort + auto-refresh, used by the report panels.
+ *
+ * Exported so hooks/use-credits.ts can reuse it rather than copying the same
+ * abort/poll/visibility handling a second time.
+ */
+export function useJson<T>(url: string, pick: (payload: any) => T, initial: T, pollMs = 60_000) {
   const [data, setData] = useState<T>(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -7,6 +7,10 @@ import type { LeadSegment } from '@/lib/lead-segments'
 import { useCalls, useCallStats, useTranscript } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
 import { useHealth, useOverview, useQuality, useSources, useWeekly } from '@/hooks/use-reports'
+import { useCredits } from '@/hooks/use-credits'
+import { CreditsPill } from '@/components/billing/credits-pill'
+import { TopUpDialog } from '@/components/billing/topup-dialog'
+import { UsageBillingPanel } from '@/components/billing/usage-billing-panel'
 import {
   Activity,
   AlertTriangle,
@@ -1562,11 +1566,24 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any) => void }) 
   )
 }
 
-function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any }) {
+function ReportsPage({
+  leadStats,
+  callStats,
+  onTopUp,
+}: {
+  leadStats: any
+  callStats: any
+  onTopUp: () => void
+}) {
   const { data: sources, isLoading: sourcesLoading } = useSources()
   const { data: weekly, isLoading: weeklyLoading } = useWeekly()
   const { data: quality, isLoading: qualityLoading } = useQuality(30)
   const [exporting, setExporting] = useState(false)
+  // Performance and billing answer different questions, so they get their own
+  // views rather than one endlessly scrolling page. Segmented control rather
+  // than TabsContent, matching how Tabs is already used elsewhere in this file.
+  const [tab, setTab] = useState("performance")
+  const { data: credits } = useCredits()
 
   const pieData = useMemo(
     () => sources.map((row, i) => ({ name: row.source, value: row.count, fill: CHART_COLORS[i % CHART_COLORS.length] })),
@@ -1629,52 +1646,99 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <p className="motion-fade text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                Performance
+                {tab === "performance" ? "Performance" : "Usage & billing"}
               </p>
               <h1 className="motion-rise mt-3 text-balance font-display text-4xl font-semibold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
                 Reports
                 <span className="text-muted-foreground"> &amp; analytics</span>
               </h1>
               <p className="motion-rise mt-4 max-w-[52ch] text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
-                Where your leads come from, how the agent performs on the phone, and what it gets wrong.
+                {tab === "performance"
+                  ? "Where your leads come from, how the agent performs on the phone, and what it gets wrong."
+                  : "What your calling is costing, how fast credits are going down, and every charge in detail."}
               </p>
             </div>
-            <Button
-              variant="outline"
-              onClick={downloadLeadExport}
-              disabled={exporting}
-              className="motion-fade shrink-0"
-            >
-              <Download data-icon="inline-start" />
-              {exporting ? "Preparing…" : "Export all leads"}
-            </Button>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Tabs value={tab} onValueChange={setTab}>
+                <TabsList>
+                  <TabsTrigger value="performance">Performance</TabsTrigger>
+                  <TabsTrigger value="billing">Usage &amp; billing</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {tab === "performance" ? (
+                <Button
+                  variant="outline"
+                  onClick={downloadLeadExport}
+                  disabled={exporting}
+                  className="motion-fade"
+                >
+                  <Download data-icon="inline-start" />
+                  {exporting ? "Preparing…" : "Export all leads"}
+                </Button>
+              ) : (
+                <Button onClick={onTopUp} className="motion-fade">
+                  <CircleDollarSign data-icon="inline-start" />
+                  Add credits
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Headline rates, divided rather than boxed — cards here would add
               four more containers to a page that is already all containers. */}
           <dl className="stagger mt-10 grid grid-cols-2 gap-x-6 gap-y-8 border-t border-border/60 pt-8 lg:grid-cols-4 lg:divide-x lg:divide-border/60">
-            {[
-              {
-                label: "Qualification rate",
-                value: `${qualificationRate}%`,
-                sub: `${(leadStats?.qualified ?? 0).toLocaleString()} of ${(leadStats?.total ?? 0).toLocaleString()} leads`,
-              },
-              {
-                label: "Connect rate",
-                value: totalCalls > 0 ? `${Math.round(((callStats?.connected ?? 0) / totalCalls) * 100)}%` : "—",
-                sub: `${(callStats?.connected ?? 0).toLocaleString()} of ${totalCalls.toLocaleString()} calls`,
-              },
-              {
-                label: "Avg. connected call",
-                value: formatDuration(callStats?.avg_duration),
-                sub: "Time on the phone",
-              },
-              {
-                label: "Top source",
-                value: bestSource?.source ?? "—",
-                sub: bestSource ? `${bestSource.count.toLocaleString()} leads` : "No leads yet",
-              },
-            ].map((kpi, i) => (
+            {(tab === "performance"
+              ? [
+                  {
+                    label: "Qualification rate",
+                    value: `${qualificationRate}%`,
+                    sub: `${(leadStats?.qualified ?? 0).toLocaleString()} of ${(leadStats?.total ?? 0).toLocaleString()} leads`,
+                  },
+                  {
+                    label: "Connect rate",
+                    value: totalCalls > 0 ? `${Math.round(((callStats?.connected ?? 0) / totalCalls) * 100)}%` : "—",
+                    sub: `${(callStats?.connected ?? 0).toLocaleString()} of ${totalCalls.toLocaleString()} calls`,
+                  },
+                  {
+                    label: "Avg. connected call",
+                    value: formatDuration(callStats?.avg_duration),
+                    sub: "Time on the phone",
+                  },
+                  {
+                    label: "Top source",
+                    value: bestSource?.source ?? "—",
+                    sub: bestSource ? `${bestSource.count.toLocaleString()} leads` : "No leads yet",
+                  },
+                ]
+              : [
+                  {
+                    label: "Credits left",
+                    value: credits
+                      ? credits.balance_credits.toLocaleString("en-IN", { maximumFractionDigits: 0 })
+                      : "—",
+                    sub: credits
+                      ? `about ${credits.runway.minutes.toLocaleString("en-IN")} minutes of calling`
+                      : "Loading",
+                  },
+                  {
+                    label: "Used last 7 days",
+                    value: credits ? credits.burn.last_7d_credits.toLocaleString("en-IN") : "—",
+                    sub: credits ? `${credits.burn.calls_7d.toLocaleString("en-IN")} calls charged` : "Loading",
+                  },
+                  {
+                    label: "Avg. per call",
+                    value: credits ? credits.burn.avg_credits_per_call.toFixed(2) : "—",
+                    sub: credits ? `at ${credits.rate.credits_per_minute} credits a minute` : "Loading",
+                  },
+                  {
+                    // total_talk_time has been computed by /api/calls/stats all
+                    // along with nothing reading it. It earns its keep here.
+                    label: "Total talk time",
+                    value: formatDuration(callStats?.total_talk_time),
+                    sub: "Across all connected calls",
+                  },
+                ]
+            ).map((kpi, i) => (
               <div key={kpi.label} className={cn("min-w-0", i > 0 && "lg:pl-6")}>
                 <dt className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                   {kpi.label}
@@ -1689,6 +1753,10 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
         </div>
       </section>
 
+      {tab === "billing" ? (
+        <UsageBillingPanel onTopUp={onTopUp} />
+      ) : (
+      <>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -1930,6 +1998,8 @@ function ReportsPage({ leadStats, callStats }: { leadStats: any; callStats: any 
           </CardContent>
         </Card>
       </div>
+      </>
+      )}
     </>
   )
 }
@@ -2840,6 +2910,7 @@ export function LeadCommandDashboard() {
   const [campaignOpen, setCampaignOpen] = useState(false)
   const [statusFilter, setStatusFilter] = useState("All")
   const [notifOpen, setNotifOpen] = useState(false)
+  const [topUpOpen, setTopUpOpen] = useState(false)
   const [readNotifs, setReadNotifs] = useState<string[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -3131,7 +3202,7 @@ export function LeadCommandDashboard() {
       case "Follow-ups":
         return <FollowUpsPage onSelectLead={selectLead} />
       case "Reports":
-        return <ReportsPage leadStats={leadStats} callStats={callStats} />
+        return <ReportsPage leadStats={leadStats} callStats={callStats} onTopUp={() => setTopUpOpen(true)} />
       case "AI agent":
         return <AIAgentPage leadStats={leadStats} callStats={callStats} />
       case "Settings":
@@ -3291,6 +3362,9 @@ export function LeadCommandDashboard() {
             />
           </div>
           <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            {/* Balance first in the cluster: it is the one number that changes
+                what the other buttons cost, so it reads before them. */}
+            <CreditsPill onTopUp={() => setTopUpOpen(true)} />
             <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} />
             <Button variant="outline" size="sm" disabled={isUploading} onClick={() => fileInputRef.current?.click()} className="px-2.5 sm:px-3">
               <Upload data-icon="inline-start" />
@@ -3413,6 +3487,10 @@ export function LeadCommandDashboard() {
           </SheetBody>
         </SheetContent>
       </Sheet>
+
+      {/* Add credits. Reachable from the top-bar pill, the Reports billing tab,
+          and any "out of credits" toast, so it lives at the shell level. */}
+      <TopUpDialog open={topUpOpen} onOpenChange={setTopUpOpen} />
 
       {/* Start Campaign Dialog */}
       <Dialog open={campaignOpen} onOpenChange={setCampaignOpen}>
