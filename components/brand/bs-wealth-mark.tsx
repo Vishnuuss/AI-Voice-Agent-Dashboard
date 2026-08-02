@@ -49,12 +49,20 @@ export function BsWealthLockup({
 export function BsWealthLockupInline({ className }: { className?: string }) {
   return (
     <div className={cn("flex flex-col leading-none select-none", className)}>
-      {/* Compact two-line mark: monogram over descriptor, tracked so both
-          lines finish on roughly the same measure. */}
-      <span className="font-display text-[20px] font-semibold leading-none tracking-[0.06em] text-primary">
+      {/* Two-line mark: monogram over a tracked-out descriptor.
+       *
+       * The monogram was set at 20px, which is only a little above body copy —
+       * at that size it read as a heading rather than a mark. At 30px it
+       * carries the top of the sidebar properly.
+       *
+       * The 0.3em tracking on the descriptor is what makes it read as a label
+       * rather than a small word, and it matches the stacked BsWealthLockup so
+       * the two lockups stay recognisably the same mark. It also widens the
+       * descriptor to sit under the monogram on a similar measure. */}
+      <span className="font-display text-[30px] font-semibold leading-none tracking-[0.02em] text-primary">
         BS
       </span>
-      <span className="mt-1.5 text-[8.5px] font-semibold leading-none tracking-[0.18em] text-sidebar-foreground uppercase">
+      <span className="mt-2 text-[9.5px] font-semibold leading-none tracking-[0.3em] text-sidebar-foreground/80 uppercase">
         Wealth Finance
       </span>
     </div>

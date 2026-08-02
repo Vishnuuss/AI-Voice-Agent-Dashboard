@@ -3301,7 +3301,14 @@ export function LeadCommandDashboard() {
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="relative flex h-28 shrink-0 items-center justify-center border-b border-sidebar-border px-6">
+        {/* px-6 is not arbitrary: the nav below is p-3 and each button px-3, so
+            its labels start 24px from the sidebar edge. Matching that puts the
+            "BS" on the same vertical line as "Overview" and everything under it.
+            Left-aligned rather than centred for the same reason — a centred mark
+            over a left-aligned nav reads as a mistake.
+            min-h keeps the previous 112px header height while py-6 guarantees
+            the breathing room regardless of how the mark is sized later. */}
+        <div className="relative flex min-h-28 shrink-0 items-center border-b border-sidebar-border px-6 py-6">
           <BsWealthLockupInline />
 
           <Button variant="ghost" size="icon" className="absolute right-3 top-3 lg:hidden text-sidebar-foreground hover:bg-sidebar-accent" onClick={() => setSidebarOpen(false)}>
@@ -3311,7 +3318,10 @@ export function LeadCommandDashboard() {
         </div>
 
         <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
-          <p className="px-3 pb-2 pt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">Workspace</p>
+          {/* pt-5 rather than pt-3: with the border above, a little more air
+              here separates the mark from the nav instead of letting the
+              section header crowd it. */}
+          <p className="px-3 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">Workspace</p>
           {navItems.map((item) => {
             // These badges were hard-coded to 20 and 6 regardless of the data.
             const count = navCount(item.countKey)
