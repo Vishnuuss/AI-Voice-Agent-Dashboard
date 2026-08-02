@@ -2870,14 +2870,11 @@ function LeadDetailSheet({
                           >
                             {openTranscriptId === call.id ? "Hide transcript" : "Show transcript"}
                           </Button>
-                          <a
-                            href={call.transcript_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-muted-foreground underline underline-offset-4"
-                          >
-                            Open original
-                          </a>
+                          {/* The "Open original" link that used to sit here pointed
+                              straight at the stored file. That file is served as
+                              application/octet-stream, so clicking it downloaded a
+                              blob instead of showing anything — the transcript now
+                              renders inline, which is all anyone wanted from it. */}
                         </div>
                       ) : (
                         !call.recording_url && (
