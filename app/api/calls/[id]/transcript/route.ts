@@ -16,8 +16,61 @@ import { createServerClient } from '@/lib/supabase-server';
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_BYTES = 1_000_000;
 
+/**
+ * Parses Dograh's plain-text transcript.
+ *
+ * The stored URL 302s to a file served as application/octet-stream, and the
+ * body is NOT JSON — it looks like:
+ *
+ *   [2026-08-02T06:34:49.066+00:00] assistant: నమస్కారం, నేను ...
+ *   [2026-08-02T06:34:57.046+00:00] user: ఆ లోన్ ఆ అవసరం ఉందండి.
+ *   Hello?
+ *   Lo?
+ *
+ * A line without a timestamp is a continuation of the turn above it — that is
+ * how a caller's repeated "Hello?" arrives — so it is appended rather than
+ * dropped or treated as a new turn.
+ */
+function parseTextTranscript(body: string): TranscriptMessage[] | null {
+  const LINE = /^\[([^\]]+)\]\s*([A-Za-z_]+)\s*:\s*([\s\S]*)$/;
+  const out: TranscriptMessage[] = [];
+
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) continue;
+
+    const match = line.match(LINE);
+    if (match) {
+      const [, timestamp, rawSpeaker, text] = match;
+      out.push({
+        speaker: speakerOf(rawSpeaker),
+        text: text.trim(),
+        at: timestamp,
+      });
+    } else if (out.length > 0) {
+      out[out.length - 1].text += `\n${line.trim()}`;
+    }
+  }
+
+  return out.length > 0 ? out : null;
+}
+
+interface TranscriptMessage {
+  speaker: 'Agent' | 'Customer';
+  text: string;
+  at?: string;
+}
+
+/** Dograh says "assistant"/"user"; everything else is normalised the same way. */
+function speakerOf(raw: string): 'Agent' | 'Customer' {
+  const s = String(raw).toLowerCase();
+  return s.includes('user') || s.includes('customer') || s.includes('human') || s.includes('caller')
+    ? 'Customer'
+    : 'Agent';
+}
+
 /** Normalises the many transcript shapes into [{ speaker, text }]. */
-function toMessages(payload: unknown): { speaker: string; text: string }[] | null {
+function toMessages(payload: unknown): TranscriptMessage[] | null {
   const rows = Array.isArray(payload)
     ? payload
     : Array.isArray((payload as any)?.messages)
@@ -36,13 +89,9 @@ function toMessages(payload: unknown): { speaker: string; text: string }[] | nul
       const rawSpeaker = String(row?.speaker ?? row?.role ?? row?.source ?? 'agent').toLowerCase();
       const text = row?.text ?? row?.content ?? row?.message ?? row?.transcript ?? '';
       if (!text) return null;
-      const speaker =
-        rawSpeaker.includes('user') || rawSpeaker.includes('customer') || rawSpeaker.includes('human')
-          ? 'Customer'
-          : 'Agent';
-      return { speaker, text: String(text) };
+      return { speaker: speakerOf(rawSpeaker), text: String(text) };
     })
-    .filter(Boolean) as { speaker: string; text: string }[];
+    .filter(Boolean) as TranscriptMessage[];
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -91,16 +140,20 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
       const body = (await res.text()).slice(0, MAX_BYTES);
 
-      let parsed: unknown = null;
+      let messages: TranscriptMessage[] | null = null;
       try {
-        parsed = JSON.parse(body);
+        messages = toMessages(JSON.parse(body));
       } catch {
-        // Plain-text transcript; fall through and return it as-is.
+        // Not JSON. Dograh's own transcripts are plain text, so this is the
+        // normal path rather than the exception — parse it properly instead of
+        // dumping the raw file at the reader.
+        messages = parseTextTranscript(body);
       }
 
       return NextResponse.json({
-        messages: parsed ? toMessages(parsed) : null,
-        text: parsed ? null : body,
+        messages,
+        // Only fall back to raw text when parsing genuinely produced nothing.
+        text: messages && messages.length > 0 ? null : body,
       });
     } finally {
       clearTimeout(timer);

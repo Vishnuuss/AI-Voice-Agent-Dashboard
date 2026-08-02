@@ -125,6 +125,8 @@ export function useCallStats() {
 export interface TranscriptMessage {
   speaker: string;
   text: string;
+  /** ISO timestamp of the turn, when the transcript carries one. */
+  at?: string;
 }
 
 /**

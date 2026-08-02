@@ -410,7 +410,7 @@ function OverviewPage({
   range: string
   setRange: (v: string) => void
   leads: any[]
-  onSelectLead: (lead: any) => void
+  onSelectLead: (lead: any, callId?: string | null) => void
   statusFilter: string
   setStatusFilter: (v: string) => void
   setActiveNav: (v: string) => void
@@ -710,7 +710,7 @@ function LeadsPage({
   isLoading,
 }: {
   leads: any[]
-  onSelectLead: (lead: any) => void
+  onSelectLead: (lead: any, callId?: string | null) => void
   statusFilter: string
   setStatusFilter: (v: string) => void
   totalCount: number
@@ -805,7 +805,13 @@ function LeadsPage({
   )
 }
 
-function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => void; callStats: any }) {
+function CallsPage({
+  onSelectLead,
+  callStats,
+}: {
+  onSelectLead: (lead: any, callId?: string | null) => void
+  callStats: any
+}) {
   const [callFilter, setCallFilter] = useState("all")
   const [page, setPage] = useState(1)
   // Filtering happens server-side on outcome. The old tabs filtered on a
@@ -903,7 +909,7 @@ function CallsPage({ onSelectLead, callStats }: { onSelectLead: (lead: any) => v
                   <TableRow
                     key={call.id}
                     className={cn(call.leads && "cursor-pointer hover:bg-muted/50")}
-                    onClick={() => call.leads && onSelectLead(call.leads)}
+                    onClick={() => call.leads && onSelectLead(call.leads, call.id)}
                   >
                     <TableCell>
                       <CallOutcomeIcon outcome={call.outcome} />
@@ -1424,7 +1430,7 @@ function CampaignsPage({
   )
 }
 
-function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any) => void }) {
+function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any, callId?: string | null) => void }) {
   const [page, setPage] = useState(1)
   // Real data. This page used to filter a module-level array that was permanently
   // empty, so it showed "0 leads need follow-up" no matter what was in the database.
@@ -2524,21 +2530,37 @@ function TranscriptView({ callId }: { callId: string | null }) {
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading transcript…</p>
   if (error) return <p className="text-sm text-destructive">{error}</p>
   if (messages && messages.length > 0) {
+    // Turn times let you see where the agent stalled — a long gap before a
+    // reply is the thing you are usually hunting for when reading one of these.
+    const startedAt = messages.find((m) => m.at)?.at
+    const offsetOf = (at?: string) => {
+      if (!at || !startedAt) return null
+      const seconds = Math.round((new Date(at).getTime() - new Date(startedAt).getTime()) / 1000)
+      if (!Number.isFinite(seconds) || seconds < 0) return null
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+    }
+
     return (
-      <div className="flex max-h-80 flex-col gap-3 overflow-y-auto">
-        {messages.map((msg, i) => (
-          <div key={i} className={cn("flex flex-col", msg.speaker === "Agent" ? "items-start" : "items-end")}>
-            <span className="mb-1 text-xs text-muted-foreground">{msg.speaker}</span>
-            <div
-              className={cn(
-                "max-w-[85%] rounded-lg px-3 py-2 text-sm",
-                msg.speaker === "Agent" ? "bg-primary text-primary-foreground" : "bg-muted",
-              )}
-            >
-              {msg.text}
+      <div className="flex max-h-80 flex-col gap-3 overflow-y-auto pr-1">
+        {messages.map((msg, i) => {
+          const offset = offsetOf(msg.at)
+          return (
+            <div key={i} className={cn("flex flex-col", msg.speaker === "Agent" ? "items-start" : "items-end")}>
+              <span className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                {msg.speaker === "Agent" ? "Shreya" : "Customer"}
+                {offset && <span className="tabular-nums opacity-70">{offset}</span>}
+              </span>
+              <div
+                className={cn(
+                  "max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm",
+                  msg.speaker === "Agent" ? "bg-primary text-primary-foreground" : "bg-muted",
+                )}
+              >
+                {msg.text}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     )
   }
@@ -2550,15 +2572,36 @@ function TranscriptView({ callId }: { callId: string | null }) {
 
 function LeadDetailSheet({
   leadId,
+  focusCallId,
   onClose,
   onSaved,
 }: {
   leadId: string | null
+  /** Set when opened from the Calls list: show only that call, not every attempt. */
+  focusCallId?: string | null
   onClose: () => void
   onSaved: () => void
 }) {
   const { lead, callHistory, isLoading, refresh } = useLead(leadId)
   const [openTranscriptId, setOpenTranscriptId] = useState<string | null>(null)
+  // Opening from a specific call and being shown eleven attempts is disorienting
+  // — you clicked one row and expected that row. The rest stay one click away.
+  const [showAllCalls, setShowAllCalls] = useState(false)
+
+  // Only narrow when the requested call is actually in this lead's history —
+  // otherwise a stale id would render an empty "This call" panel.
+  const focusedOnly =
+    Boolean(focusCallId) && !showAllCalls && callHistory.some((c: any) => c.id === focusCallId)
+  const visibleCalls = focusedOnly
+    ? callHistory.filter((c: any) => c.id === focusCallId)
+    : callHistory
+
+  // A fresh row should reopen focused, and its transcript should already be
+  // open — reading it is why you clicked.
+  useEffect(() => {
+    setShowAllCalls(false)
+    setOpenTranscriptId(focusCallId ?? null)
+  }, [focusCallId, leadId])
   const [followUp, setFollowUp] = useState("")
   const [note, setNote] = useState("")
   const [saving, setSaving] = useState(false)
@@ -2775,7 +2818,23 @@ function LeadDetailSheet({
             )}
 
             <div>
-              <h4 className="mb-3 font-medium">Call history</h4>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h4 className="font-medium">
+                  {focusedOnly ? "This call" : "Call history"}
+                </h4>
+                {focusCallId && callHistory.length > 1 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAllCalls((v) => !v)}
+                    className="h-7 px-2 text-xs"
+                  >
+                    {showAllCalls
+                      ? "Show only this call"
+                      : `Show all ${callHistory.length} calls`}
+                  </Button>
+                )}
+              </div>
               {/* The panel used to read a transcript array that was always empty, so
                   even a fully-called lead showed a blank box. This is the real
                   call_logs history for the lead, with playback and transcript. */}
@@ -2785,7 +2844,7 @@ function LeadDetailSheet({
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {callHistory.map((call: any) => (
+                  {visibleCalls.map((call: any) => (
                     <div key={call.id} className="flex flex-col gap-2 rounded-lg border bg-muted/10 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
@@ -2907,6 +2966,7 @@ export function LeadCommandDashboard() {
   const [range, setRange] = useState("7d")
   const [activeNav, setActiveNav] = useState("Overview")
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
+  const [focusCallId, setFocusCallId] = useState<string | null>(null)
   const [campaignOpen, setCampaignOpen] = useState(false)
   const [statusFilter, setStatusFilter] = useState("All")
   const [notifOpen, setNotifOpen] = useState(false)
@@ -3149,8 +3209,16 @@ export function LeadCommandDashboard() {
     window.location.href = "/login"
   }, [])
 
-  const selectLead = useCallback((lead: any) => {
-    if (lead?.id) setSelectedLeadId(lead.id)
+  /**
+   * Opens the lead panel.
+   *
+   * `callId` is passed when the click came from a specific call row, so the
+   * panel opens on that call instead of the lead's whole attempt history.
+   */
+  const selectLead = useCallback((lead: any, callId?: string | null) => {
+    if (!lead?.id) return
+    setFocusCallId(callId ?? null)
+    setSelectedLeadId(lead.id)
   }, [])
 
   const renderPage = () => {
@@ -3427,7 +3495,15 @@ export function LeadCommandDashboard() {
         })}
       </nav>
 
-      <LeadDetailSheet leadId={selectedLeadId} onClose={() => setSelectedLeadId(null)} onSaved={refreshAll} />
+      <LeadDetailSheet
+        leadId={selectedLeadId}
+        focusCallId={focusCallId}
+        onClose={() => {
+          setSelectedLeadId(null)
+          setFocusCallId(null)
+        }}
+        onSaved={refreshAll}
+      />
 
       {/* Notifications Sheet */}
       <Sheet open={notifOpen} onOpenChange={setNotifOpen}>
