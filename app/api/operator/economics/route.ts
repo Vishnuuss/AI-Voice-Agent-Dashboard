@@ -58,6 +58,13 @@ export async function GET(request: Request) {
     const estimated = new Set<string>();
     const losers: any[] = [];
     let testCalls = 0;
+    // Which models were ACTUALLY used, read off the call records. Deriving this
+    // from the rate card instead would be wrong: the rate card lists every model
+    // we have a price for, not the one running. That is precisely how a switch
+    // to the cheaper model gets believed without ever having taken effect.
+    const modelsInUse: Record<string, Set<string>> = {
+      llm: new Set(), tts: new Set(), stt: new Set(), telephony: new Set(),
+    };
 
     for (const raw of rows) {
       const call = raw as MeteredCall;
@@ -70,8 +77,18 @@ export async function GET(request: Request) {
       billedSeconds += secs;
       actualSeconds += Number(call.duration_seconds) || 0;
 
+      if (call.call_mode) modelsInUse.telephony.add(call.call_mode);
+
       let cost = 0;
       if (call.usage_info) {
+        // Keys look like "GroqLLMService#7|||llama-3.3-70b-versatile".
+        for (const kind of ['llm', 'tts', 'stt'] as const) {
+          for (const key of Object.keys((call.usage_info as any)[kind] ?? {})) {
+            const model = key.split('|||')[1];
+            if (model) modelsInUse[kind].add(model);
+          }
+        }
+
         const c = estimateProviderCost(call, config.rateCard);
         cost = c.totalMilli;
         costMilli += cost;
@@ -156,6 +173,9 @@ export async function GET(request: Request) {
         unpriced_models: [...unpriced],
         estimated_components: [...estimated],
       },
+      models_in_use: Object.fromEntries(
+        Object.entries(modelsInUse).map(([k, v]) => [k, [...v]]),
+      ),
       rate_card: config.rateCard,
     });
   } catch (err: any) {

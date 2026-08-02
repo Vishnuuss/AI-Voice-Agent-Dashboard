@@ -301,105 +301,244 @@ function ManualAdjust({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** Revenue against real provider cost. Never leaves this console. */
+/**
+ * Where our money actually goes. OPERATOR ONLY.
+ *
+ * Written to answer one question in plain language: of what the client paid,
+ * how much left our pocket and to whom. The four providers are named for what
+ * they DO, not their technical role — "llm / tts / stt / telephony" means
+ * nothing at a glance, and this screen gets read in a hurry.
+ */
 function MarginPanel({ economics }: { economics: any }) {
-  const positive = economics.margin.credits >= 0;
+  const talkedMin = economics.revenue.actual_minutes || 0;
+  const calls = economics.coverage.billable_calls || 0;
+  const avgSeconds = calls > 0 ? Math.round((talkedMin * 60) / calls) : 0;
+  const earned = economics.revenue.credits;
+  const paid = economics.cost.credits;
+  const kept = economics.margin.credits;
+
+  // Plain names, plus what each one does and which model is behind it.
+  //
+  // The model comes from models_in_use — read off the actual calls — NOT from
+  // the rate card. The rate card lists every model we hold a price for, so
+  // reading it would happily report the cheap model while the expensive one is
+  // running, which is exactly the mistake this panel exists to catch.
+  const used = economics.models_in_use ?? {};
+  const modelOf = (kind: string) => (used[kind] ?? []).join(', ');
+  const META: Record<string, { name: string; does: string; model: string }> = {
+    telephony: { name: 'Phone line', does: 'carries the call', model: modelOf('telephony') },
+    llm: { name: 'AI brain', does: 'decides what to say', model: modelOf('llm') },
+    tts: { name: 'Voice', does: 'speaks the words', model: modelOf('tts') },
+    stt: { name: 'Hearing', does: 'understands the caller', model: modelOf('stt') },
+    overhead: { name: 'Other', does: 'fixed cost per call', model: '' },
+  };
+
+  const rows = Object.entries(economics.cost.by_provider as Record<string, number>)
+    .map(([key, amount]) => ({
+      key,
+      amount,
+      perMin: talkedMin > 0 ? amount / talkedMin : 0,
+      share: paid > 0 ? (amount / paid) * 100 : 0,
+      ...(META[key] ?? { name: key, does: '', model: '' }),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+
+  const biggest = rows[0];
+  const usingBigModel = String(META.llm.model).includes('70b');
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: 'Revenue', value: rs(economics.revenue.credits), sub: `${economics.revenue.billed_minutes} billed min` },
-          { label: 'Provider cost', value: rs(economics.cost.credits), sub: `${rs(economics.cost.per_actual_minute)}/actual min` },
-          { label: 'Margin', value: rs(economics.margin.credits), sub: `${economics.margin.pct}%` },
-          { label: 'Rounding uplift', value: `${economics.revenue.rounding_uplift_pct}%`, sub: `${economics.revenue.actual_minutes} actual min` },
-        ].map((s) => (
-          <Card key={s.label}>
-            <CardContent className="p-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                {s.label}
-              </div>
-              <div className="mt-2 font-display text-2xl font-semibold tabular-nums">{s.value}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{s.sub}</div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* The whole story in one sentence, before any table. */}
+      <Card className="shadow-paper">
+        <CardContent className="p-6">
+          <p className="text-lg leading-relaxed">
+            Your agent talked for{' '}
+            <span className="font-display font-semibold tabular-nums">{talkedMin}</span> minutes
+            across <span className="font-display font-semibold tabular-nums">{calls}</span> calls
+            {avgSeconds > 0 ? ` (about ${avgSeconds}s each)` : ''}. You charged{' '}
+            <span className="font-display font-semibold tabular-nums">{rs(earned)}</span>, paid out{' '}
+            <span className="font-display font-semibold tabular-nums">{rs(paid)}</span>, and kept{' '}
+            <span
+              className={cn(
+                'font-display font-semibold tabular-nums',
+                kept >= 0 ? 'text-primary' : 'text-destructive',
+              )}
+            >
+              {rs(kept)}
+            </span>
+            .
+          </p>
+          <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 border-t border-border/70 pt-4 text-sm text-muted-foreground">
+            <span>
+              Billed{' '}
+              <span className="tabular-nums text-foreground">
+                {economics.revenue.billed_minutes} min
+              </span>{' '}
+              against <span className="tabular-nums text-foreground">{talkedMin} min</span> talked
+              {economics.revenue.rounding_uplift_pct > 0 ? (
+                <>
+                  {' '}— rounding adds{' '}
+                  <span className="tabular-nums text-foreground">
+                    {economics.revenue.rounding_uplift_pct}%
+                  </span>
+                </>
+              ) : null}
+            </span>
+            <span>
+              Margin <span className="tabular-nums text-foreground">{economics.margin.pct}%</span>
+            </span>
+          </div>
+        </CardContent>
+      </Card>
 
-      {economics.cost.per_actual_minute > economics.rate.credits_per_minute && (
-        <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-sm">
-          <TrendingDown className="mt-0.5 size-4 shrink-0 text-primary" />
-          <span>
-            A real minute of talk time costs {rs(economics.cost.per_actual_minute)} but you charge{' '}
-            {rs(economics.rate.credits_per_minute)}. You are profitable only because calls round up
-            to whole minutes — a call landing just under a minute boundary loses money.
-          </span>
-        </div>
-      )}
-
-      <Card>
+      {/* The money flow: what came in, what went out, what is left. */}
+      <Card className="shadow-paper">
         <CardHeader>
-          <CardTitle>Where the money goes</CardTitle>
+          <CardTitle className="font-display">Where the money went</CardTitle>
           <CardDescription>
-            {economics.coverage.calls_with_cost_data} of {economics.coverage.billable_calls} calls have
-            usage data. {economics.coverage.test_calls_excluded} test calls excluded.
+            Every rupee of the {rs(earned)} the client paid, and what each part costs per minute of
+            talk time.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {Object.entries(economics.cost.by_provider as Record<string, number>)
-            .sort((a, b) => b[1] - a[1])
-            .map(([name, value]) => {
-              const share = economics.cost.credits > 0 ? (value / economics.cost.credits) * 100 : 0;
-              return (
-                <div key={name} className="flex items-center gap-3">
-                  <div className="w-20 shrink-0 text-sm capitalize">{name}</div>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div className="grow-bar h-full rounded-full bg-primary" style={{ width: `${share}%` }} />
-                  </div>
-                  <div className="w-20 shrink-0 text-right text-sm tabular-nums">{rs(value)}</div>
-                  <div className="w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
-                    {Math.round(share)}%
-                  </div>
+        <CardContent>
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <span className="font-medium">Client paid you</span>
+            <span className="font-display text-xl font-semibold tabular-nums">{rs(earned)}</span>
+          </div>
+
+          <div className="space-y-3 py-3">
+            {rows.map((row) => (
+              <div key={row.key} className="flex items-center gap-3">
+                <div className="w-32 shrink-0">
+                  <div className="text-sm font-medium">{row.name}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{row.does}</div>
                 </div>
-              );
-            })}
-          {economics.warnings.estimated_components.length > 0 && (
-            <p className="pt-2 text-xs text-muted-foreground">
-              Estimated from call duration: {economics.warnings.estimated_components.join(', ')} —
-              the provider does not report usage.
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={cn(
+                      'grow-bar h-full rounded-full',
+                      row.key === biggest?.key ? 'bg-primary' : 'bg-muted-foreground/40',
+                    )}
+                    style={{ width: `${Math.max(2, row.share)}%` }}
+                  />
+                </div>
+                <div className="w-20 shrink-0 text-right text-sm tabular-nums">
+                  −{rs(row.amount)}
+                </div>
+                <div className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
+                  {rs(row.perMin)}/min
+                </div>
+                <div className="w-10 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+                  {Math.round(row.share)}%
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-border pt-3">
+            <span className="font-medium">You keep</span>
+            <span
+              className={cn(
+                'font-display text-xl font-semibold tabular-nums',
+                kept >= 0 ? 'text-primary' : 'text-destructive',
+              )}
+            >
+              {rs(kept)}
+            </span>
+          </div>
+
+          {economics.warnings.estimated_components.length > 0 ? (
+            <p className="pt-3 text-xs text-muted-foreground">
+              &ldquo;Hearing&rdquo; is estimated from call length — that provider does not report
+              its own usage. Everything else is measured.
             </p>
-          )}
-          {economics.warnings.unpriced_models.length > 0 && (
+          ) : null}
+          {economics.warnings.unpriced_models.length > 0 ? (
             <p className="pt-1 text-xs text-destructive">
-              Not in your rate card, counted as ₹0: {economics.warnings.unpriced_models.join(', ')}
+              Missing from your rate card, so counted as ₹0:{' '}
+              {economics.warnings.unpriced_models.join(', ')}. Your real cost is higher than shown.
             </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* What to actually do about it. */}
+      <Card className="shadow-paper">
+        <CardHeader>
+          <CardTitle className="font-display">What to fix</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {biggest ? (
+            <div className="flex items-start gap-2">
+              <TrendingDown className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>
+                <span className="font-medium">{biggest.name}</span> is your biggest cost at{' '}
+                {rs(biggest.amount)} — {Math.round(biggest.share)}% of everything you spend, or{' '}
+                {rs(biggest.perMin)} per minute.
+                {biggest.model ? (
+                  <>
+                    {' '}Running <span className="font-mono text-xs">{biggest.model}</span>.
+                  </>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
+
+          {usingBigModel ? (
+            <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>
+                You are running the <span className="font-medium">70B</span> model, which costs
+                roughly 12&times; more per word than the 8B one. Switch it in Dograh &rarr; Model
+                Configurations. Your workflow file already claims the 8B model — Dograh ignores
+                that block, which is why the change never took effect.
+              </span>
+            </div>
+          ) : null}
+
+          {economics.cost.per_actual_minute > economics.rate.credits_per_minute ? (
+            <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>
+                A real minute of talking costs you {rs(economics.cost.per_actual_minute)} but you
+                charge {rs(economics.rate.credits_per_minute)}. You make money only because calls
+                round up to a full minute — a call running just under a minute boundary loses
+                money. Either move to the cheaper model, or raise the rate.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>
+                A real minute costs {rs(economics.cost.per_actual_minute)} against{' '}
+                {rs(economics.rate.credits_per_minute)} charged — profitable at any call length.
+              </span>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      <Card>
+      {/* Individual calls that lost money. */}
+      <Card className="shadow-paper">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {positive ? <TrendingUp className="size-4 text-primary" /> : <TrendingDown className="size-4 text-destructive" />}
-            Loss-making calls
-          </CardTitle>
-          <CardDescription>Calls that cost more than they earned, worst first.</CardDescription>
+          <CardTitle className="font-display">Calls that lost money</CardTitle>
+          <CardDescription>Worst first. Empty is what you want here.</CardDescription>
         </CardHeader>
         <CardContent>
           {economics.loss_making_calls.length === 0 ? (
             <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
               <CheckCircle2 className="size-4 text-primary" />
-              None. Every call in this period made money.
+              None — every call in this period made money.
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Run</TableHead>
+                  <TableHead>Call</TableHead>
                   <TableHead>Length</TableHead>
                   <TableHead className="text-right">Charged</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
-                  <TableHead className="text-right">Loss</TableHead>
+                  <TableHead className="text-right">Lost</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
