@@ -54,11 +54,19 @@ export interface MeteredCall {
 
 const DEFAULTS = {
   rateMilliPerMinute: 4000,
-  // 1-second increments above a 60-second minimum. Whole-minute increments made
-  // a 69-second call cost the same as a 120-second one, which burns a client's
-  // balance at roughly twice the rate they expect and is impossible to defend
-  // on a statement.
-  billingIncrementSeconds: 1,
+  // Whole-minute pulse billing: a 61-second call is charged as two minutes.
+  //
+  // This is the owner's pricing decision, and the arithmetic supports it. A
+  // minute of talking costs roughly Rs 4.66 in provider fees against Rs 4.00
+  // charged, so per-second billing loses money on every call over a minute.
+  // Pulse billing is also the norm for Indian telephony, and the carrier bills
+  // us the same way.
+  //
+  // The trade is that a 61-second call costs the client the same as a
+  // 119-second one. That is defensible only because it is stated plainly
+  // wherever the rate appears — see the pill tooltip, the top-up dialog and the
+  // billing panel, which all say "rounded up to the minute".
+  billingIncrementSeconds: 60,
   minimumBillableSeconds: 60,
   lowBalanceMilli: 200_000,
   criticalBalanceMilli: 50_000,
@@ -143,20 +151,16 @@ export function isBillableCall(
 }
 
 /**
- * Billed seconds: a minimum charge, then rounded up to the increment.
+ * Billed seconds: a minimum charge, then rounded UP to the next whole minute.
  *
- * The carrier charges a full minute for a call that lasts seconds — the one
- * Vobiz record that reported it billed 60s for a 17s call — so a minimum is
- * needed to avoid losing money on very short calls. But that single data point
- * is equally consistent with "60s minimum, then per-second", and reading it as
- * "60s blocks forever" was an over-generalisation with a real cost: a 69-second
- * call billed as two full minutes, which doubles the charge for nine seconds
- * and is indefensible on a client's statement.
+ *   14s  ->  60s  ->  4.00 credits
+ *   54s  ->  60s  ->  4.00
+ *   61s  -> 120s  ->  8.00   <- a second past the minute costs a full minute
+ *  143s  -> 180s  -> 12.00
  *
- * So: 60s minimum, 1s increments above it.
- *   54s -> 60s   (minimum applies)
- *   69s -> 69s   (was 120s)
- *  143s -> 143s  (was 180s)
+ * Both the minimum and the increment are configurable per account, so this can
+ * be softened to per-second billing (increment 1) without a code change if the
+ * cost side ever improves enough to afford it.
  */
 export function billableSecondsFor(call: MeteredCall, config: BillingConfig): number {
   if (!isBillableCall(call).billable) return 0;

@@ -100,7 +100,7 @@ export function TopUpDialog({
           <DialogTitle className="font-display">Add credits</DialogTitle>
           <DialogDescription>
             {step === 'amount'
-              ? `Credits are used as your agent makes calls, at ${perMinute} credits a minute.`
+              ? `Credits are used as your agent makes calls, at ${perMinute} credits a minute, charged in whole minutes.`
               : 'Pay using the details below, then enter the reference so we can match it.'}
           </DialogDescription>
         </DialogHeader>

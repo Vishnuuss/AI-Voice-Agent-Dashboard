@@ -91,12 +91,12 @@ create table if not exists public.billing_account (
   -- Pricing. 4 credits per minute, billed in whole minutes because the telco
   -- bills us the same way (a 17s call came back with BillDuration 60).
   rate_milli_per_minute     integer not null default 4000,
-  -- 1-second increments above a 60-second minimum. Whole-minute increments
-  -- charged a 69-second call as two full minutes — double the price for nine
-  -- seconds, which drains a balance at twice the expected rate and cannot be
-  -- defended on a statement. The minimum still covers the carrier's own
-  -- minimum charge on very short calls.
-  billing_increment_seconds integer not null default 1,
+  -- Whole-minute pulse billing: a 61-second call is charged as two minutes.
+  -- A minute of talking costs about Rs 4.66 in provider fees against Rs 4.00
+  -- charged, so per-second billing loses money on any call over a minute.
+  -- Pulse billing is standard for Indian telephony and the carrier bills us the
+  -- same way. Set billing_increment_seconds to 1 to switch to per-second.
+  billing_increment_seconds integer not null default 60,
   minimum_billable_seconds  integer not null default 60,
 
   low_balance_milli         bigint  not null default 200000,  -- 200 credits

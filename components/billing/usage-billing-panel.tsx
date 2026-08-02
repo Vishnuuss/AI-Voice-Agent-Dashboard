@@ -186,6 +186,15 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
               Add credits
             </Button>
           </div>
+          {/* Stated up front, on the page where charges are read. Whole-minute
+              billing is standard for telephony, but only defensible if the
+              client learns it here rather than by working it out from a
+              statement line. */}
+          <div className="mt-2 text-xs text-muted-foreground">
+            Calls are charged in whole minutes at {rate} credits a minute — a call of 1 minute
+            5 seconds counts as 2 minutes. Only connected calls are charged; missed, busy and
+            failed calls are free.
+          </div>
         </CardHeader>
         <CardContent>
           {ledgerLoading && ledger.entries.length === 0 ? (
