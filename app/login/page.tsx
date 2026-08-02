@@ -1,15 +1,32 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { createBrowserClient } from '@/lib/supabase-browser';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { BsWealthLockup } from '@/components/brand/bs-wealth-mark';
 
+/**
+ * Sign in.
+ *
+ * There is deliberately NO sign-up link. This dashboard exposes a client's
+ * entire lead list and call recordings, so anyone able to register themselves
+ * would be able to read all of it. Logins are created by us in the operator
+ * console and handed over.
+ *
+ * Previously this page was hard-coded slate and blue with a generic title,
+ * sharing none of the design language of the app behind it — the first screen
+ * a client sees should not look like a different product.
+ */
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -17,90 +34,120 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // Built lazily, on submit. Creating it during render threw "Missing env var
-      // NEXT_PUBLIC_SUPABASE_URL" while Next prerendered this page, which failed
-      // the whole production build whenever the env vars were not present at
-      // build time.
+      // Built lazily, on submit. Creating it during render threw "Missing env
+      // var NEXT_PUBLIC_SUPABASE_URL" while Next prerendered this page, which
+      // failed the production build whenever env vars were absent at build time.
       const supabase = createBrowserClient();
 
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
         password,
       });
 
-      if (error) {
-        setError(error.message);
-      } else if (data.session) {
+      if (signInError) {
+        // Supabase says "Invalid login credentials" for both a wrong password
+        // and an unknown account — deliberately, so the form cannot be used to
+        // discover which addresses have logins. Kept, with plainer wording.
+        setError(
+          /invalid login/i.test(signInError.message)
+            ? 'That email and password do not match.'
+            : signInError.message,
+        );
+        return;
+      }
+
+      if (data.session) {
         router.push('/');
-        router.refresh(); // Refresh to apply middleware session
+        router.refresh(); // let the middleware pick up the new session cookie
       }
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred');
+      setError(err?.message || 'Something went wrong. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--background)]">
-      <div className="w-full max-w-md p-8 space-y-8 bg-[#1e2330] rounded-xl shadow-2xl border border-white/5">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-white tracking-tight">AI Voice Agent</h1>
-          <p className="mt-2 text-sm text-gray-400">Sign in to your account to continue</p>
+    <main className="ambient-wash relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-12">
+      <div className="motion-rise relative z-10 w-full max-w-sm">
+        <div className="mb-8 flex justify-center">
+          <BsWealthLockup size="lg" />
         </div>
 
-        <form className="mt-8 space-y-6" onSubmit={handleLogin}>
-          {error && (
-            <div className="p-3 text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-md">
-              {error}
-            </div>
-          )}
+        <div className="rounded-2xl border border-border/70 bg-card p-6 shadow-paper sm:p-8">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Sign in</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Lead operations for BS Wealth Finance.
+          </p>
 
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300">
-                Email address
+          <form onSubmit={handleLogin} className="mt-6 space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-sm font-medium">
+                Email
               </label>
-              <input
+              <Input
                 id="email"
-                name="email"
                 type="email"
-                autoComplete="email"
+                autoComplete="username"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-4 py-3 bg-[#0b0f19] border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                placeholder="you@example.com"
+                placeholder="you@company.com"
+                disabled={isLoading}
               />
             </div>
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300">
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-sm font-medium">
                 Password
               </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-4 py-3 bg-[#0b0f19] border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                placeholder="••••••••"
-              />
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={isLoading}
+                  className="pr-10"
+                />
+                {/* Passwords here are long generated strings that get typed by
+                    hand at least once, so being able to see them matters. */}
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 focus:ring-offset-[#1e2330] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? 'Signing in...' : 'Sign in'}
-          </button>
-        </form>
+            {error && (
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </p>
+            )}
+
+            <Button type="submit" disabled={isLoading} className="w-full">
+              {isLoading && <Loader2 data-icon="inline-start" className="animate-spin" />}
+              {isLoading ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+
+          <p className="mt-6 border-t border-border/70 pt-4 text-xs leading-relaxed text-muted-foreground">
+            Accounts are set up for you. If you cannot get in or need access for
+            someone else, contact BS Financial Services.
+          </p>
+        </div>
       </div>
-    </div>
+    </main>
   );
 }

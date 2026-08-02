@@ -33,22 +33,25 @@ export function OperatorConsole() {
   const [account, setAccount] = useState<any>(null);
   const [economics, setEconomics] = useState<any>(null);
   const [integrity, setIntegrity] = useState<any>(null);
+  const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [t, s, e, i] = await Promise.all([
+      const [t, s, e, i, u] = await Promise.all([
         opFetch('/api/operator/topups?status=all'),
         opFetch('/api/operator/settings'),
         opFetch('/api/operator/economics?days=90'),
         opFetch('/api/operator/integrity'),
+        opFetch('/api/operator/users'),
       ]);
       setTopups(t.requests ?? []);
       setAccount(s.account ?? null);
       setEconomics(e);
       setIntegrity(i);
+      setUsers(u.users ?? []);
     } catch (err: any) {
       toast.error('Could not load', { description: err?.message });
     } finally {
@@ -143,6 +146,7 @@ export function OperatorConsole() {
           </TabsTrigger>
           <TabsTrigger value="margin">Margin</TabsTrigger>
           <TabsTrigger value="settings">Pricing</TabsTrigger>
+          <TabsTrigger value="users">Logins</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -235,6 +239,8 @@ export function OperatorConsole() {
         {tab === 'margin' && economics && <MarginPanel economics={economics} />}
 
         {tab === 'settings' && account && <PricingPanel account={account} onSaved={load} />}
+
+        {tab === 'users' && <UsersPanel users={users} onChanged={load} />}
       </div>
     </div>
   );
@@ -632,5 +638,188 @@ function PricingPanel({ account, onSaved }: { account: any; onSaved: () => void 
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Dashboard logins. OPERATOR ONLY.
+ *
+ * There is no public sign-up, on purpose: this dashboard exposes the client's
+ * whole lead list and every call recording, so anyone who could register would
+ * be able to read all of it. Accounts are created here and handed over.
+ *
+ * A generated password is shown ONCE. Supabase stores only a bcrypt hash, so it
+ * genuinely cannot be retrieved afterwards — a forgotten password is reset, not
+ * looked up.
+ */
+function UsersPanel({ users, onChanged }: { users: any[]; onChanged: () => void }) {
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reveal, setReveal] = useState<{ email: string; password: string } | null>(null);
+
+  async function createUser() {
+    setBusy(true);
+    try {
+      const result = await opFetch('/api/operator/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), name: name.trim() || undefined }),
+      });
+      setReveal({ email: result.user.email, password: result.password });
+      setEmail('');
+      setName('');
+      onChanged();
+    } catch (err: any) {
+      toast.error('Could not create the login', { description: err?.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword(user: any) {
+    setBusy(true);
+    try {
+      const result = await opFetch('/api/operator/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: user.id }),
+      });
+      setReveal({ email: user.email, password: result.password });
+      onChanged();
+    } catch (err: any) {
+      toast.error('Could not reset', { description: err?.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeUser(user: any) {
+    setBusy(true);
+    try {
+      await opFetch(`/api/operator/users?id=${encodeURIComponent(user.id)}`, { method: 'DELETE' });
+      toast.success(`Removed ${user.email}`);
+      onChanged();
+    } catch (err: any) {
+      toast.error('Could not remove', { description: err?.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {reveal && (
+        <Card className="border-primary/50 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="font-display">Password for {reveal.email}</CardTitle>
+            <CardDescription>
+              Copy this now and send it to them. It cannot be shown again — only reset.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-3">
+            <code className="rounded-md border border-border bg-background px-3 py-2 font-mono text-base tracking-wide">
+              {reveal.password}
+            </code>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                navigator.clipboard.writeText(reveal.password);
+                toast.success('Copied');
+              }}
+            >
+              Copy
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setReveal(null)}>
+              Done
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Create a login</CardTitle>
+          <CardDescription>
+            For the client, or anyone else who needs the dashboard. They get the leads,
+            calls and credits — never this console.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <div className="min-w-56 flex-1 space-y-1.5">
+            <label htmlFor="new-email" className="text-xs text-muted-foreground">Email</label>
+            <Input
+              id="new-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="client@company.com"
+            />
+          </div>
+          <div className="w-44 space-y-1.5">
+            <label htmlFor="new-name" className="text-xs text-muted-foreground">Name (optional)</label>
+            <Input
+              id="new-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Sreekanth"
+            />
+          </div>
+          <Button onClick={createUser} disabled={busy || !email.includes('@')}>
+            {busy && <Loader2 data-icon="inline-start" className="animate-spin" />}
+            Create login
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Who can sign in</CardTitle>
+          <CardDescription>{users.length} account{users.length === 1 ? '' : 's'}.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {users.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">No logins yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Last signed in</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((u) => (
+                  <TableRow key={u.id}>
+                    <TableCell className="font-medium">{u.email}</TableCell>
+                    <TableCell className="text-muted-foreground">{u.name ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {u.last_sign_in_at
+                        ? new Date(u.last_sign_in_at).toLocaleString('en-IN', {
+                            day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+                          })
+                        : 'Never'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => resetPassword(u)}>
+                          Reset password
+                        </Button>
+                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => removeUser(u)}>
+                          Remove
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
