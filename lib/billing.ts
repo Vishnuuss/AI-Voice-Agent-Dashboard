@@ -22,6 +22,7 @@ export interface BillingConfig {
   lifetimeSpentMilli: number;
   rateMilliPerMinute: number;
   billingIncrementSeconds: number;
+  minimumBillableSeconds: number;
   lowBalanceMilli: number;
   criticalBalanceMilli: number;
   autoPauseAtMilli: number;
@@ -53,7 +54,12 @@ export interface MeteredCall {
 
 const DEFAULTS = {
   rateMilliPerMinute: 4000,
-  billingIncrementSeconds: 60,
+  // 1-second increments above a 60-second minimum. Whole-minute increments made
+  // a 69-second call cost the same as a 120-second one, which burns a client's
+  // balance at roughly twice the rate they expect and is impossible to defend
+  // on a statement.
+  billingIncrementSeconds: 1,
+  minimumBillableSeconds: 60,
   lowBalanceMilli: 200_000,
   criticalBalanceMilli: 50_000,
   autoPauseAtMilli: 20_000,
@@ -99,6 +105,7 @@ export async function getBillingConfig(
     lifetimeSpentMilli: Number(data.lifetime_spent_milli) || 0,
     rateMilliPerMinute: clampInt(data.rate_milli_per_minute, DEFAULTS.rateMilliPerMinute, 1, 1_000_000),
     billingIncrementSeconds: clampInt(data.billing_increment_seconds, DEFAULTS.billingIncrementSeconds, 1, 600),
+    minimumBillableSeconds: clampInt(data.minimum_billable_seconds, DEFAULTS.minimumBillableSeconds, 0, 600),
     lowBalanceMilli: clampInt(data.low_balance_milli, DEFAULTS.lowBalanceMilli, 0, Number.MAX_SAFE_INTEGER),
     criticalBalanceMilli: clampInt(data.critical_balance_milli, DEFAULTS.criticalBalanceMilli, 0, Number.MAX_SAFE_INTEGER),
     autoPauseAtMilli: clampInt(data.auto_pause_at_milli, DEFAULTS.autoPauseAtMilli, 0, Number.MAX_SAFE_INTEGER),
@@ -136,18 +143,27 @@ export function isBillableCall(
 }
 
 /**
- * Billed seconds, rounded UP to the increment.
+ * Billed seconds: a minimum charge, then rounded up to the increment.
  *
- * Whole minutes because the telco bills us the same way — a real 17-second call
- * came back from Vobiz with BillDuration 60. Charging per second while paying
- * per minute loses money on every short call, and short calls dominate lead
- * qualification.
+ * The carrier charges a full minute for a call that lasts seconds — the one
+ * Vobiz record that reported it billed 60s for a 17s call — so a minimum is
+ * needed to avoid losing money on very short calls. But that single data point
+ * is equally consistent with "60s minimum, then per-second", and reading it as
+ * "60s blocks forever" was an over-generalisation with a real cost: a 69-second
+ * call billed as two full minutes, which doubles the charge for nine seconds
+ * and is indefensible on a client's statement.
+ *
+ * So: 60s minimum, 1s increments above it.
+ *   54s -> 60s   (minimum applies)
+ *   69s -> 69s   (was 120s)
+ *  143s -> 143s  (was 180s)
  */
 export function billableSecondsFor(call: MeteredCall, config: BillingConfig): number {
   if (!isBillableCall(call).billable) return 0;
   const seconds = Math.max(0, Math.round(Number(call.duration_seconds) || 0));
-  const inc = config.billingIncrementSeconds;
-  return Math.ceil(seconds / inc) * inc;
+  const charged = Math.max(seconds, config.minimumBillableSeconds);
+  const inc = Math.max(1, config.billingIncrementSeconds);
+  return Math.ceil(charged / inc) * inc;
 }
 
 /** Milli-credits for a span of billed seconds. Exact when increment is 60. */

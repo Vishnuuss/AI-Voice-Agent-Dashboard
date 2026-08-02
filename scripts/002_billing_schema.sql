@@ -91,7 +91,13 @@ create table if not exists public.billing_account (
   -- Pricing. 4 credits per minute, billed in whole minutes because the telco
   -- bills us the same way (a 17s call came back with BillDuration 60).
   rate_milli_per_minute     integer not null default 4000,
-  billing_increment_seconds integer not null default 60,
+  -- 1-second increments above a 60-second minimum. Whole-minute increments
+  -- charged a 69-second call as two full minutes — double the price for nine
+  -- seconds, which drains a balance at twice the expected rate and cannot be
+  -- defended on a statement. The minimum still covers the carrier's own
+  -- minimum charge on very short calls.
+  billing_increment_seconds integer not null default 1,
+  minimum_billable_seconds  integer not null default 60,
 
   low_balance_milli         bigint  not null default 200000,  -- 200 credits
   critical_balance_milli    bigint  not null default 50000,   --  50 credits
@@ -130,6 +136,9 @@ insert into public.billing_account (id) values ('default') on conflict (id) do n
 -- rather than an env var so they can be changed from the operator console
 -- without a redeploy. `create table if not exists` above will not add this to
 -- an existing table, hence the explicit ALTER — this whole file is re-runnable.
+alter table public.billing_account
+  add column if not exists minimum_billable_seconds integer not null default 60;
+
 alter table public.billing_account
   add column if not exists payment_instructions jsonb not null default '{
     "upi_id": "",

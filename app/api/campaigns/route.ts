@@ -163,12 +163,27 @@ export async function POST(request: Request) {
         const billingConfig = await getBillingConfig(billing);
         const balance = billingConfig.balanceMilli;
 
-        if (balance <= 0) {
+        // A single connected call costs at least the minimum charge, and Dograh
+        // dials `safeConcurrency` of them at once — so the real floor is what
+        // one full parallel batch can cost, not zero. Launching with 7 credits
+        // and two calls in flight is how a balance reaches minus five.
+        const minChargeMilli = Math.round(
+          (billingConfig.minimumBillableSeconds * billingConfig.rateMilliPerMinute) / 60,
+        );
+        const floorMilli = minChargeMilli * safeConcurrency;
+
+        if (balance < floorMilli) {
           return NextResponse.json(
             {
-              error: 'Out of credits. Add credits before starting a campaign.',
+              error:
+                balance <= 0
+                  ? 'Out of credits. Add credits before starting a campaign.'
+                  : `Not enough credits to start safely. ${toCredits(balance)} left, but ` +
+                    `${safeConcurrency} call${safeConcurrency === 1 ? '' : 's'} at once can cost ` +
+                    `up to ${toCredits(floorMilli)} credits before anything can be stopped.`,
               code: 'INSUFFICIENT_CREDITS',
               balance_credits: toCredits(balance),
+              required_credits: toCredits(floorMilli),
             },
             { status: 402 },
           );
