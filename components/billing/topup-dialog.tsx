@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -38,6 +38,26 @@ export function TopUpDialog({
   const [reference, setReference] = useState('');
   const [step, setStep] = useState<'amount' | 'pay'>('amount');
   const [copied, setCopied] = useState(false);
+  const [qr, setQr] = useState<{ qr_data_url: string; upi_uri: string } | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
+
+  // Fetch a QR carrying THIS amount once the client reaches the pay step, so
+  // their UPI app opens with the rupee value already filled in.
+  useEffect(() => {
+    if (step !== 'pay' || credits < 100) return;
+    let cancelled = false;
+    setQr(null);
+    setQrError(null);
+    fetch(`/api/credits/topup/qr?credits=${credits}`)
+      .then(async (r) => {
+        const payload = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!r.ok) setQrError(payload?.error || 'Could not load the payment code.');
+        else setQr(payload);
+      })
+      .catch(() => { if (!cancelled) setQrError('Could not load the payment code.'); });
+    return () => { cancelled = true; };
+  }, [step, credits]);
 
   const presets = data?.presets ?? [500, 1000, 2500, 5000];
   const perMinute = data?.credits_per_minute ?? 4;
@@ -148,22 +168,36 @@ export function TopUpDialog({
             </>
           ) : (
             <>
-              {payment.qr_image_url ? (
-                <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-4">
+              {qr ? (
+                <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-white p-4">
+                  {/* White plate regardless of theme: a QR inverted by dark mode
+                      will not scan. */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={payment.qr_image_url}
-                    alt="Scan to pay by UPI"
-                    className="size-48 rounded-md object-contain"
+                    src={qr.qr_data_url}
+                    alt={`Scan to pay ₹${credits}`}
+                    className="size-48 object-contain"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs font-medium text-neutral-700">
                     Scan to pay ₹{credits.toLocaleString('en-IN')}
                   </p>
                 </div>
-              ) : (
+              ) : qrError ? (
                 <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-                  Payment details have not been set up yet. Please contact us to pay.
+                  {qrError}
                 </div>
+              ) : (
+                <div className="flex h-64 items-center justify-center rounded-lg border border-border">
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                </div>
+              )}
+
+              {/* On a phone the client is already holding the device, so
+                  scanning is impossible — this opens their UPI app directly. */}
+              {qr && (
+                <Button variant="outline" className="w-full sm:hidden" render={<a href={qr.upi_uri} />}>
+                  Open UPI app to pay ₹{credits.toLocaleString('en-IN')}
+                </Button>
               )}
 
               {payment.upi_id && (
@@ -191,16 +225,20 @@ export function TopUpDialog({
 
               <div className="space-y-1.5">
                 <label htmlFor="upi-ref" className="text-sm">
-                  Payment reference
+                  UPI transaction ID <span className="text-destructive">*</span>
                 </label>
                 <Input
                   id="upi-ref"
-                  placeholder="UPI transaction ID or bank reference"
+                  placeholder="e.g. 412345678901"
                   value={reference}
                   onChange={(e) => setReference(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  {payment.note || 'This helps us match your payment quickly.'}
+                  {/* Required, not optional: this is the only thing tying the
+                      request to a payment that actually arrived. Without it the
+                      request cannot be verified and would just be rejected. */}
+                  After paying, copy the transaction ID from your UPI app and paste it here. We
+                  match it against the payment before adding your credits.
                 </p>
               </div>
 
@@ -222,7 +260,7 @@ export function TopUpDialog({
               Continue
             </Button>
           ) : (
-            <Button onClick={submit} disabled={isSubmitting}>
+            <Button onClick={submit} disabled={isSubmitting || reference.trim().length < 4}>
               {isSubmitting && <Loader2 data-icon="inline-start" className="animate-spin" />}
               {isSubmitting ? 'Sending…' : "I've paid"}
             </Button>
