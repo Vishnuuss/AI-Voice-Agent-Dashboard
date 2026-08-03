@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLeads, useLeadStats, useLead, updateLead, type LeadQuery } from '@/hooks/use-leads'
 import { useCampaigns, useLeadSegmentCounts, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
 import type { LeadSegment } from '@/lib/lead-segments'
+import { DEFAULT_VERTICAL, VERTICAL_LABELS, VERTICAL_STYLES, parseVertical, type Vertical } from '@/lib/verticals'
 import { useCalls, useCallStats, useTranscript } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
 import { useHealth, useOverview, useQuality, useSources, useWeekly } from '@/hooks/use-reports'
@@ -239,6 +240,52 @@ function StatFigure({
   )
 }
 
+/**
+ * A lead's business line. The agent sends it on every call and it is persisted in
+ * qual_data.vertical, so no database column is needed. Falls back to loan, which
+ * is the only vertical with a built agent today.
+ */
+function verticalOf(lead: any): Vertical {
+  return parseVertical(lead?.qual_data?.vertical) ?? DEFAULT_VERTICAL
+}
+
+function verticalLabelOf(lead: any) {
+  return VERTICAL_LABELS[verticalOf(lead)]
+}
+
+function verticalStyle(lead: any) {
+  return VERTICAL_STYLES[verticalOf(lead)]
+}
+
+/**
+ * What the caller asked for — "Home loan", "Business loan".
+ *
+ * The webhook stores the extracted loan type on `property_type` (the column
+ * predates the loan agent and was named for the real-estate workflow), and also
+ * inside qual_data. Read both so a lead scored before either path existed still
+ * shows something.
+ */
+function loanTypeOf(lead: any): string | null {
+  const raw = lead?.property_type ?? lead?.qual_data?.loan_type
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  const titled = s.charAt(0).toUpperCase() + s.slice(1)
+  return /loan/i.test(titled) ? titled : `${titled} loan`
+}
+
+/**
+ * Why the lead has the score it has, and who decided it. Written by the webhook
+ * into qual_data.scoring. Older leads predate it and get a plain fallback rather
+ * than an invented explanation.
+ */
+function scoreReasonOf(lead: any): string {
+  const s = lead?.qual_data?.scoring
+  if (!s?.reason) return "Scored before reasons were recorded"
+  const who = s.scored_by === "agent" ? "the agent" : s.scored_by === "none" ? "no scoring" : "scoring rules"
+  return `${s.reason} — decided by ${who}`
+}
+
 function getScoreLabel(score: number) {
   if (score >= 80) return { label: "Hot", color: "text-red-500", bg: "bg-red-500/10" }
   if (score >= 60) return { label: "Warm", color: "text-orange-500", bg: "bg-orange-500/10" }
@@ -332,15 +379,41 @@ function LeadRow({ lead, onSelect, columns }: { lead: any; onSelect: (lead: any)
           <TableCell>
             <span className="text-sm text-muted-foreground">{lead.city || "—"}</span>
           </TableCell>
+          {/* What the caller actually asked for. The single most useful fact
+              about a loan lead, so it earns its own column rather than hiding
+              in the detail drawer. */}
+          <TableCell>
+            <span className="text-sm">{loanTypeOf(lead) || "—"}</span>
+          </TableCell>
           <TableCell>
             <span className="text-sm">{lead.budget || "—"}</span>
           </TableCell>
         </>
       )}
       <TableCell>
-        <Badge variant="outline" className={`${scoreData.color} ${scoreData.bg} border-transparent`}>
-          {score > 0 ? `${scoreData.label} · ${score}` : "Unscored"}
-        </Badge>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            {/* title= carries the reason, so hovering a score answers "why 50?" */}
+            <Badge
+              variant="outline"
+              className={`${scoreData.color} ${scoreData.bg} border-transparent`}
+              title={scoreReasonOf(lead)}
+            >
+              {score > 0 ? `${scoreData.label} · ${score}` : "Unscored"}
+            </Badge>
+            {/* Which business line earned that score. Once solar, real estate and
+                investing agents exist, one lead list holds all four and a bare
+                number says nothing about what the lead actually wanted. */}
+            <Badge variant="outline" className={`${verticalStyle(lead).color} ${verticalStyle(lead).bg} border-transparent`}>
+              {verticalLabelOf(lead)}
+            </Badge>
+          </div>
+          {/* The single most useful fact about a loan lead, visible without
+              opening the row: which loan they actually asked for. */}
+          {loanTypeOf(lead) && (
+            <span className="text-xs text-muted-foreground">{loanTypeOf(lead)}</span>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         <StatusBadge status={leadStatusLabel(lead)} />
@@ -781,6 +854,7 @@ function LeadsPage({
                 <TableHead>Lead</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Location</TableHead>
+                <TableHead>Loan type</TableHead>
                 <TableHead>Budget / amount</TableHead>
                 <TableHead>Score</TableHead>
                 <TableHead>Status</TableHead>
@@ -789,7 +863,7 @@ function LeadsPage({
             </TableHeader>
             <TableBody className="stagger-rows">
               {leads.length === 0 ? (
-                <EmptyRow colSpan={7}>
+                <EmptyRow colSpan={8}>
                   {isLoading ? "Loading leads…" : "No leads found. Upload a CSV to import leads."}
                 </EmptyRow>
               ) : (
@@ -2722,7 +2796,13 @@ function LeadDetailSheet({
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg bg-secondary p-3">
                 <p className="text-xs text-muted-foreground">Score</p>
-                <p className="text-lg font-semibold text-primary">{score}/100</p>
+                {/* "100 from Loan" - the number alone is ambiguous once solar,
+                    real estate and investing agents are live. */}
+                <p className="text-lg font-semibold text-primary">
+                  {score}/100 <span className="text-sm font-normal text-muted-foreground">from {verticalLabelOf(lead)}</span>
+                </p>
+                {/* A score nobody can audit is a score nobody trusts. */}
+                <p className="mt-1 text-xs text-muted-foreground">{scoreReasonOf(lead)}</p>
               </div>
               <div className="rounded-lg bg-secondary p-3">
                 <p className="text-xs text-muted-foreground">Source</p>
@@ -2733,8 +2813,8 @@ function LeadDetailSheet({
                 <p className="text-sm font-semibold">{lead.budget || qualData.loan_amount || "—"}</p>
               </div>
               <div className="rounded-lg bg-secondary p-3">
-                <p className="text-xs text-muted-foreground">Loan / property type</p>
-                <p className="text-sm font-semibold">{lead.property_type || qualData.loan_type || "—"}</p>
+                <p className="text-xs text-muted-foreground">Loan type</p>
+                <p className="text-sm font-semibold">{loanTypeOf(lead) || "—"}</p>
               </div>
             </div>
 

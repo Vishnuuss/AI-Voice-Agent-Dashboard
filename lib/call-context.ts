@@ -10,8 +10,13 @@
  *  2. Depending on the delivery path the values arrive either flat on the payload,
  *     or nested under gathered_context / extracted_variables / variables / context.
  *
+ * As of the two-question agent the workflow also sends `lead_score` (its own
+ * 100/50/0 verdict) and `vertical` (which business line the call was for).
+ *
  * Everything here is defensive: unknown shapes yield nulls, never throws.
  */
+
+import { DEFAULT_VERTICAL, parseVertical } from '@/lib/verticals';
 
 /** Values a Jinja template produces for a variable that did not resolve. */
 const PLACEHOLDER_VALUES = new Set(['', 'none', 'null', 'undefined', 'nan', 'n/a', '{}', '[]', '-']);
@@ -115,6 +120,14 @@ export interface CallSignals {
   customer_name: string | null;
   /** The agent's own qualified flag, used as a fallback interest signal. */
   qualified_flag: boolean | null;
+  /** Score the agent decided during the call, 0-100. Overrides the additive rules. */
+  lead_score: string | null;
+  /**
+   * Which business line the call was for: loan, solar, realestate, investing.
+   * Each vertical gets its own Dograh workflow, and each names itself here, so a
+   * single lead list can hold all four and a score is never ambiguous.
+   */
+  vertical: string | null;
 }
 
 /**
@@ -201,6 +214,8 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     notes: cleanString(pick(flat, ['notes', 'note', 'remarks', 'comments'])),
     customer_name: cleanString(pick(flat, ['customer_name', 'name', 'lead_name'])),
     qualified_flag: qualifiedFlag,
+    lead_score: cleanString(pick(flat, ['lead_score', 'score', 'call_score'])),
+    vertical: parseVertical(pick(flat, ['vertical', 'business_line', 'product_line', 'agent_type'])) ?? DEFAULT_VERTICAL,
   };
 }
 
@@ -291,9 +306,21 @@ export function extractQaVerdict(raw: unknown): QaVerdict | null {
   return { tags, sentiment, score, summary };
 }
 
-/** The jsonb blob we persist on call_logs.gathered_context and leads.qual_data. */
-export function buildGatheredContext(signals: CallSignals, outcome: string): Record<string, any> {
+/**
+ * The jsonb blob we persist on call_logs.gathered_context and leads.qual_data.
+ *
+ * `scoring` is included so the dashboard can show WHO decided the score and why,
+ * rather than presenting a bare number nobody can audit.
+ */
+export function buildGatheredContext(
+  signals: CallSignals,
+  outcome: string,
+  scoring?: { score: number; scoredBy: string; reason: string },
+): Record<string, any> {
   const context: Record<string, any> = { call_outcome: outcome };
+  if (scoring) {
+    context.scoring = { score: scoring.score, scored_by: scoring.scoredBy, reason: scoring.reason };
+  }
   if (signals.interested !== null) context.interested = signals.interested;
   if (signals.budget) context.loan_amount = signals.budget;
   if (signals.budget) context.budget_confirmed = signals.budget;
@@ -307,6 +334,10 @@ export function buildGatheredContext(signals: CallSignals, outcome: string): Rec
   if (signals.summary) context.summary = signals.summary;
   if (signals.notes) context.call_notes = signals.notes;
   if (signals.qualified_flag !== null) context.agent_qualified = signals.qualified_flag;
+  // Always stored: the dashboard shows "100 from loan", so the business line has
+  // to travel with the score even when every other field came back empty.
+  context.vertical = signals.vertical ?? DEFAULT_VERTICAL;
+  if (signals.lead_score) context.agent_lead_score = signals.lead_score;
   return context;
 }
 

@@ -18,7 +18,13 @@ export async function GET() {
       return NextResponse.json({ message: 'No data to export' }, { status: 404 });
     }
 
-    const headers = ['id', 'name', 'phone', 'email', 'city', 'status', 'qualification', 'score', 'created_at', 'call_outcome'];
+    // loan_type and budget are what makes an exported lead actionable for the
+    // loan officer - a name and a score alone do not say what to call about.
+    // score_reason travels with the score so an exported list is auditable.
+    const headers = [
+      'id', 'name', 'phone', 'email', 'city', 'status', 'qualification', 'score',
+      'loan_type', 'budget', 'score_reason', 'created_at', 'call_outcome',
+    ];
     const csvRows = [];
     csvRows.push(headers.join(','));
 
@@ -32,6 +38,9 @@ export async function GET() {
         lead.status,
         lead.qualification || '',
         lead.score || 0,
+        `"${String(lead.property_type || lead.qual_data?.loan_type || '').replace(/"/g, '""')}"`,
+        `"${String(lead.budget || lead.qual_data?.loan_amount || '').replace(/"/g, '""')}"`,
+        `"${String(lead.qual_data?.scoring?.reason || '').replace(/"/g, '""')}"`,
         lead.created_at,
         lead.call_outcome || ''
       ];

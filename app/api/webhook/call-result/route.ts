@@ -163,9 +163,18 @@ export async function POST(request: Request) {
       do_not_call: signals.do_not_call,
       outcome: outcomeRaw,
       duration: durationRaw,
+      // The agent scores the call itself (100 named a loan type / 50 needs a loan
+      // but no type / 0 not interested). When present it wins outright - the
+      // additive rules below it assume budget, income and occupation questions
+      // the two-question agent no longer asks, and would mark a perfect call ~60.
+      lead_score: signals.lead_score,
     });
 
-    const gatheredContext = buildGatheredContext(signals, result.outcome);
+    const gatheredContext = buildGatheredContext(signals, result.outcome, {
+      score: result.score,
+      scoredBy: result.scoredBy,
+      reason: result.reason,
+    });
 
     // Dograh's QA node grades the call (DEAD_AIR, HEARING_ISSUES, READ_OPTION_LIST,
     // GUESSED_MISHEARD, ...). Storing it here is what turns the dashboard into a
