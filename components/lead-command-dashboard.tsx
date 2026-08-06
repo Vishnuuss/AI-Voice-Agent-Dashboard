@@ -2411,10 +2411,14 @@ function AIAgentPage({
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
-            <CardTitle>Agent script</CardTitle>
+            {/* Names the business line explicitly. With four agents, "Agent
+                script" alone gave no clue which one was on screen - and the
+                page follows the header switch, which is not obvious from here. */}
+            <CardTitle>{VERTICAL_LABELS[promptVertical]} agent script</CardTitle>
             <CardDescription>
-              What Shreya actually says, live in Dograh. Saving publishes immediately — the next call uses the new
-              text.
+              What the {VERTICAL_LABELS[promptVertical]} agent actually says, live in Dograh. Saving publishes
+              immediately — the next call uses the new text. Switch business line at the top of the page to edit a
+              different agent.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -2428,8 +2432,19 @@ function AIAgentPage({
         <CardContent className="flex flex-col gap-5">
           {promptsError && (
             <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
-              <p className="text-sm font-medium text-destructive">Could not load the live script</p>
+              <p className="text-sm font-medium text-destructive">
+                Could not load the {VERTICAL_LABELS[promptVertical]} agent&apos;s script
+              </p>
               <p className="mt-1 text-xs text-muted-foreground">{promptsError}</p>
+              {/* The overwhelmingly common cause is a workflow id that is set
+                  locally but missing from the deployed environment - which shows
+                  up as a blank script page and nothing else. Say so, rather than
+                  leaving a bare provider error. */}
+              <p className="mt-2 text-xs text-muted-foreground">
+                If this business line has an agent built, its workflow id is probably missing from the deployed
+                environment. It needs <code className="font-mono">DOGRAH_WORKFLOW_ID_{promptVertical.toUpperCase()}</code>{" "}
+                set where the dashboard is hosted, not only in local development.
+              </p>
             </div>
           )}
           {promptsLoading && !promptsError && Object.keys(prompts).length === 0 ? (

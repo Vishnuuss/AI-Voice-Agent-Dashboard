@@ -36,7 +36,15 @@ const MAX_PROMPT_LENGTH = 4000;
  * and the two can never drift again.
  */
 function readNodeText(node: any): string {
-  if (node?.type === 'startCall') return node.data?.greeting ?? node.data?.prompt ?? '';
+  if (node?.type === 'startCall') {
+    // Truthiness, not `??`. A node whose greeting is an empty string - which is
+    // how Dograh stores one that was cleared in the UI - would satisfy `??` and
+    // render an empty "Opening line" box while a perfectly good prompt sat right
+    // next to it, looking exactly like the script had been lost.
+    const greeting = String(node.data?.greeting ?? '').trim();
+    if (greeting) return node.data.greeting;
+    return node.data?.prompt ?? '';
+  }
   return node?.data?.prompt ?? '';
 }
 
