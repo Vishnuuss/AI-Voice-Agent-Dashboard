@@ -18,6 +18,36 @@ export type CallOutcome =
 
 const UNANSWERED: readonly CallOutcome[] = ['no_answer', 'busy', 'failed', 'voicemail', 'cancelled'];
 
+/**
+ * Dispositions that are not an exact match for any name we know, recognised by
+ * what they CONTAIN.
+ *
+ * The exact-match switch below was silently wrong for anything outside its list:
+ * an unrecognised disposition fell through to `completed`, so a `user_busy`, a
+ * `dial_no_answer` or a `switched_off` was recorded as a real conversation. The
+ * lead was then marked `called`, never retried, and never appeared under Busy or
+ * Unreachable — which is exactly the symptom of leads going missing from those
+ * lists. Worse, lib/billing-meter.ts already classified the SAME call by
+ * substring, so one call could be "Connected" on screen and "never connected" in
+ * billing at the same time. Both paths now share this function.
+ *
+ * Order matters: the first pattern that matches wins.
+ */
+const DISPOSITION_PATTERNS: [RegExp, CallOutcome][] = [
+  // Must not be a bare /answer/ — that also matches "answered".
+  [/no_+answer|noanswer|unanswered|no_+response|not_+answered|ring_*no_*answer|time(d)?_*out/, 'no_answer'],
+  [/busy|congestion|engaged/, 'busy'],
+  [/voice_*mail|answering_*machine|machine_*detect|\bamd\b/, 'voicemail'],
+  [/cancel/, 'cancelled'],
+  [
+    // "declined" is deliberately absent: it reads as a telephony rejection but
+    // can equally be a customer declining the offer, and classifying it as a
+    // failure would put that person back in the retry queue to be called again.
+    /fail|error|rejected|unreachable|not_+reachable|invalid_*number|switched_*off|out_*of_*service|no_*route|network_*error/,
+    'failed',
+  ],
+];
+
 /** Normalises the many spellings providers use ("no-answer", "NO_ANSWER", "noanswer"). */
 export function normaliseOutcome(raw: unknown): CallOutcome {
   const value = String(raw ?? '')
@@ -55,8 +85,18 @@ export function normaliseOutcome(raw: unknown): CallOutcome {
     case 'canceled':
       return 'cancelled';
     default:
-      return 'completed';
+      break;
   }
+
+  for (const [pattern, outcome] of DISPOSITION_PATTERNS) {
+    if (pattern.test(value)) return outcome;
+  }
+
+  // Still unknown. `completed` stays the default because Dograh's own vocabulary
+  // for a real conversation is open-ended — user_hangup, user_qualified,
+  // user_not_qualified, user_speech are all connected calls — so anything that
+  // does not look like a telephony failure is treated as one that happened.
+  return 'completed';
 }
 
 export function isAnswered(outcome: CallOutcome): boolean {

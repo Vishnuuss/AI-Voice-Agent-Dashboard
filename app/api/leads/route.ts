@@ -60,6 +60,17 @@ export async function GET(request: Request) {
 
     if (qualification) query = query.eq('qualification', qualification);
 
+    // How the LAST call ended, which is a different question from what state the
+    // lead is in. A busy number is status `retry_pending` with call_outcome
+    // `busy`, so filtering on status alone could never produce a list of busy or
+    // voicemail numbers.
+    const outcome = searchParams.get('outcome') || '';
+    if (outcome) {
+      const values = outcome.split(',').map((s) => s.trim()).filter(Boolean);
+      if (values.length === 1) query = query.eq('call_outcome', values[0]);
+      else if (values.length > 1) query = query.in('call_outcome', values);
+    }
+
     // Drives the Follow-ups page, which previously rendered a hard-coded empty list.
     if (followUp === 'true') query = query.not('follow_up_date', 'is', null);
 

@@ -9,6 +9,15 @@ export interface LeadQuery {
   qualification?: string;
   /** Only leads with a follow_up_date set. */
   followUp?: boolean;
+  /**
+   * Comma-separated list of leads.call_outcome values — how the LAST call ended.
+   * Separate from status: a busy number sits at status `retry_pending` with
+   * call_outcome `busy`, so without this there was no way to list busy numbers.
+   */
+  outcome?: string;
+  /** A column from the API's SORTABLE set, e.g. 'follow_up_date'. */
+  sort?: string;
+  order?: 'asc' | 'desc';
 }
 
 /**
@@ -46,6 +55,9 @@ export function useLeads(query: string, filter: LeadQuery, page: number) {
       if (parsed.status) params.set('status', parsed.status);
       if (parsed.qualification) params.set('qualification', parsed.qualification);
       if (parsed.followUp) params.set('followUp', 'true');
+      if (parsed.outcome) params.set('outcome', parsed.outcome);
+      if (parsed.sort) params.set('sort', parsed.sort);
+      if (parsed.order) params.set('order', parsed.order);
       params.set('page', page.toString());
       params.set('limit', '20');
 

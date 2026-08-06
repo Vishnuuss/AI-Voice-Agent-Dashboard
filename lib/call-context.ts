@@ -375,9 +375,111 @@ export function usableMediaUrl(value: unknown): string | null {
   return /^https?:\/\//i.test(s) ? s : null;
 }
 
-/** A visit/callback date only becomes leads.follow_up_date if it parses to a real date. */
-export function parseFollowUpDate(value: string | null): string | null {
+/**
+ * A visit/callback date only becomes leads.follow_up_date if it resolves to a
+ * real date.
+ *
+ * This used to be `new Date(value)` and nothing else, which meant it only ever
+ * accepted a machine-readable date — and a person on a phone call never gives
+ * one. "tomorrow", "next week", "Monday", "రేపు", "2 days" all produced Invalid
+ * Date, so follow_up_date stayed null and the Follow-ups page stayed empty no
+ * matter what the customer agreed to.
+ *
+ * Two further traps handled here:
+ *  - "10/05/2026" is 10 May in India and 5 October to Date(). Day-first is
+ *    parsed explicitly rather than left to the US default.
+ *  - A resolved relative date lands at 10am local, not midnight. Midnight IST
+ *    stored as UTC reads as the PREVIOUS day for anyone looking at UTC, and a
+ *    callback is a working-hours thing anyway.
+ */
+
+/** IST. Every caller and every operator on this system is in one timezone. */
+const LOCAL_OFFSET_MINUTES = 330;
+const CALLBACK_HOUR_LOCAL = 10;
+
+/** N days from today, at 10am local, as an ISO instant. */
+function daysFromToday(days: number, now = new Date()): string {
+  const local = new Date(now.getTime() + LOCAL_OFFSET_MINUTES * 60_000);
+  const target = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate() + days,
+    CALLBACK_HOUR_LOCAL,
+    0,
+    0,
+  );
+  return new Date(target - LOCAL_OFFSET_MINUTES * 60_000).toISOString();
+}
+
+/** Whole-word relative phrases, English and Telugu, in days from today. */
+const RELATIVE_DAYS: [RegExp, number][] = [
+  [/day\s*after\s*tomorrow|overmorrow|ఎల్లుండి|ఎల్లుండ/, 2],
+  // Deliberately not matching "కల్" — it collides with "కాల్", the Telugu
+  // rendering of the English word "call", which appears in almost every summary.
+  [/tomorrow|tommorow|tmrw|రేపు|రేపటి/, 1],
+  [/today|tonight|this\s*evening|ఈరోజు|ఈ\s*రోజు|సాయంత్రం/, 0],
+  [/next\s*week|వచ్చే\s*వారం|వారం\s*తర్వాత/, 7],
+  [/next\s*month|వచ్చే\s*నెల|నెల\s*తర్వాత/, 30],
+  [/weekend|వీకెండ్/, 6],
+];
+
+/** Weekday names -> JS day index. The next occurrence is taken. */
+const WEEKDAYS: [RegExp, number][] = [
+  [/sunday|ఆదివారం/, 0],
+  [/monday|సోమవారం/, 1],
+  [/tuesday|మంగళవారం/, 2],
+  [/wednesday|బుధవారం/, 3],
+  [/thursday|గురువారం/, 4],
+  [/friday|శుక్రవారం/, 5],
+  [/saturday|శనివారం/, 6],
+];
+
+export function parseFollowUpDate(value: string | null, now = new Date()): string | null {
   if (!value) return null;
+  const text = String(value).trim().toLowerCase();
+  if (!text) return null;
+
+  // ── Day-first numeric dates: 10/05/2026, 10-05-26, 10.5.2026 ───────────────
+  const dmy = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]);
+    // Only treat it as day-first when it can BE day-first; 2026/05/10 stays for
+    // the ISO path below.
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2020 && year <= 2100) {
+      const at = Date.UTC(year, month - 1, day, CALLBACK_HOUR_LOCAL, 0, 0);
+      const iso = new Date(at - LOCAL_OFFSET_MINUTES * 60_000);
+      if (!Number.isNaN(iso.getTime())) return iso.toISOString();
+    }
+  }
+
+  // ── Relative phrases ───────────────────────────────────────────────────────
+  for (const [pattern, days] of RELATIVE_DAYS) {
+    if (pattern.test(text)) return daysFromToday(days, now);
+  }
+
+  // "in 3 days", "3 days later", "after 2 weeks", "2 రోజుల తర్వాత"
+  const inN = text.match(/(\d{1,3})\s*(day|days|రోజు|రోజుల|week|weeks|వారం|వారాల|month|months|నెల|నెలల)/);
+  if (inN) {
+    const n = Number(inN[1]);
+    const unit = inN[2];
+    const multiplier = /week|వార/.test(unit) ? 7 : /month|నెల/.test(unit) ? 30 : 1;
+    const days = n * multiplier;
+    // A callback more than a year out is a mis-extraction, not a plan.
+    if (n > 0 && days <= 365) return daysFromToday(days, now);
+  }
+
+  // ── Weekday names: the NEXT one, never today ───────────────────────────────
+  for (const [pattern, weekday] of WEEKDAYS) {
+    if (pattern.test(text)) {
+      const local = new Date(now.getTime() + LOCAL_OFFSET_MINUTES * 60_000);
+      const delta = ((weekday - local.getUTCDay() + 7) % 7) || 7;
+      return daysFromToday(delta, now);
+    }
+  }
+
+  // ── Anything a Date can read on its own (ISO, "12 May 2026", …) ────────────
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   // Ignore anything absurd (a mis-extracted "2" becoming year 2001, etc).

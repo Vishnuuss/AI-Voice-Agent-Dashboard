@@ -103,6 +103,12 @@ const LEAD_FILTERS: { label: string; query: LeadQuery }[] = [
   { label: "Follow-up", query: { followUp: true } },
   { label: "Retry pending", query: { status: "retry_pending" } },
   { label: "Unreachable", query: { status: "no_answer,unreachable" } },
+  // Filter on how the last call ENDED, not on the lead's state. A busy number
+  // and a voicemail both sit at status retry_pending, so they were invisible
+  // until now — there was no filter in the app that could single them out.
+  { label: "Busy", query: { outcome: "busy" } },
+  { label: "No answer", query: { outcome: "no_answer" } },
+  { label: "Voicemail", query: { outcome: "voicemail" } },
 ]
 
 /** call_logs.outcome -> how it reads in the UI. */
@@ -1508,18 +1514,27 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any, callId?: st
   const [page, setPage] = useState(1)
   // Real data. This page used to filter a module-level array that was permanently
   // empty, so it showed "0 leads need follow-up" no matter what was in the database.
-  const { leads, totalCount, totalPages, isLoading, refresh } = useLeads("", { followUp: true }, page)
+  // Soonest first. The default sort is created_at desc, which buried the callback
+  // due today under whichever leads happened to be uploaded most recently.
+  const { leads, totalCount, totalPages, isLoading, refresh } = useLeads(
+    "",
+    { followUp: true, sort: "follow_up_date", order: "asc" },
+    page,
+  )
   const { leads: retryLeads } = useLeads("", { status: "retry_pending" }, 1)
 
   const now = Date.now()
-  const dueSoon = leads.filter((l: any) => {
+  const dayMs = 24 * 3600 * 1000
+  const ageOf = (l: any) => {
     const date = new Date(l.follow_up_date as string).getTime()
-    return Number.isFinite(date) && date - now < 2 * 24 * 3600 * 1000
-  })
-  const upcoming = leads.filter((l: any) => {
-    const date = new Date(l.follow_up_date as string).getTime()
-    return Number.isFinite(date) && date - now >= 2 * 24 * 3600 * 1000
-  })
+    return Number.isFinite(date) ? date - now : null
+  }
+  // A callback whose date has already passed used to be counted under "due in
+  // the next 2 days", so a month-old missed follow-up looked like upcoming work
+  // and nothing in the app ever said it had been missed.
+  const overdue = leads.filter((l: any) => { const d = ageOf(l); return d !== null && d < 0 })
+  const dueSoon = leads.filter((l: any) => { const d = ageOf(l); return d !== null && d >= 0 && d < 2 * dayMs })
+  const upcoming = leads.filter((l: any) => { const d = ageOf(l); return d !== null && d >= 2 * dayMs })
 
   return (
     <>
@@ -1534,7 +1549,16 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any, callId?: st
         </Button>
       </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className={cn(overdue.length > 0 && "border-destructive/40")}>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2">
+              <CalendarClock className={cn("size-4", overdue.length > 0 ? "text-destructive" : "text-muted-foreground")} />
+              <span className="text-2xl font-semibold">{overdue.length}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Overdue</p>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
@@ -2694,7 +2718,11 @@ function LeadDetailSheet({
     setSaving(true)
     try {
       const patch: Record<string, any> = {}
-      if (followUp) patch.follow_up_date = followUp
+      // "" is sent deliberately when a date is cleared — the API turns it into
+      // null. Only skipping falsy values meant a follow-up could be set but
+      // never removed once it was wrong.
+      const existingFollowUp = lead.follow_up_date ? String(lead.follow_up_date).slice(0, 10) : ""
+      if (followUp !== existingFollowUp) patch.follow_up_date = followUp
       if (note.trim()) {
         const stamp = new Date().toISOString().slice(0, 16).replace("T", " ")
         patch.notes = [lead.notes, `[${stamp}] ${note.trim()}`].filter(Boolean).join("\n")
