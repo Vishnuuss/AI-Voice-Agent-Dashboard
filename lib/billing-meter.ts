@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { dograh } from './dograh';
 import { hashPhone } from './billing';
+import { normaliseOutcome } from './call-scoring';
 
 /**
  * Reads the meter.
@@ -17,7 +18,14 @@ import { hashPhone } from './billing';
  * cannot identify.
  */
 
-/** Dograh disposition -> the outcome vocabulary billing understands. */
+/**
+ * Dograh disposition -> the outcome vocabulary billing understands.
+ *
+ * Shares normaliseOutcome() with the dashboard on purpose. These were two
+ * separate ladders — one substring-based here, one exact-match there — so the
+ * same disposition could be billed as a connected call while the dashboard
+ * showed it as a no-answer, or the reverse. One classifier, one verdict.
+ */
 function deriveOutcome(run: any): string {
   const disposition = String(
     run?.gathered_context?.mapped_call_disposition ??
@@ -26,13 +34,7 @@ function deriveOutcome(run: any): string {
   ).toLowerCase();
 
   if (!disposition) return run?.is_completed ? 'completed' : 'unknown';
-  if (disposition.includes('no_answer') || disposition.includes('noanswer')) return 'no_answer';
-  if (disposition.includes('busy')) return 'busy';
-  if (disposition.includes('voicemail') || disposition.includes('machine')) return 'voicemail';
-  if (disposition.includes('failed') || disposition.includes('error')) return 'failed';
-  if (disposition.includes('cancel')) return 'cancelled';
-  // user_qualified, user_not_qualified, user_speech ... all mean someone talked.
-  return 'completed';
+  return normaliseOutcome(disposition);
 }
 
 function durationOf(run: any): number {
@@ -125,6 +127,95 @@ export async function meterCampaign(
   }
 
   return out;
+}
+
+/**
+ * Meter ONE run, by id — the path taken the moment a call ends.
+ *
+ * The webhook fires within seconds of hang-up, but the balance used to sit
+ * still until the next cron tick, so the client could watch a campaign run for
+ * ten minutes with the number frozen and reasonably conclude the meter was
+ * broken. This puts the charge on the ledger immediately.
+ *
+ * It still reads the run FROM DOGRAH rather than trusting the webhook body: the
+ * body is a Jinja-rendered template where every value arrives as a string and a
+ * missing one arrives as "None", and it does not carry `mode` at all — and mode
+ * is exactly what decides whether a call is a billable phone call or a free
+ * browser test. Charging from that payload would eventually bill a test call.
+ *
+ * Returns null when the run cannot be read; the cron sweep then bills it on the
+ * next tick. Nothing here is allowed to throw — a billing hiccup must never
+ * cost us the call record.
+ */
+export async function meterSingleRun(
+  billing: SupabaseClient,
+  dograhRunId: number,
+  opts: { workflowId?: number; accountId?: string } = {},
+): Promise<{
+  id?: string;
+  dograh_run_id: number;
+  duration_seconds: number;
+  call_mode: string | null;
+  outcome: string;
+  usage_info: any;
+  campaign_id: number | null;
+} | null> {
+  const workflowId = opts.workflowId ?? Number(process.env.DOGRAH_WORKFLOW_ID ?? 1);
+  const accountId = opts.accountId ?? 'default';
+
+  try {
+    const run = await dograh.getWorkflowRun(workflowId, dograhRunId);
+    if (!run || !Number.isFinite(Number(run.id))) return null;
+
+    const duration = durationOf(run);
+    const mode = run?.mode ?? run?.initial_context?.provider ?? null;
+
+    // A run read seconds after hang-up can still be missing its duration or its
+    // mode. Inserting THAT would be permanent damage, not a delay: rows are
+    // written insert-if-absent, so a row stored with zero duration is never
+    // corrected by a later pass, and postDebit would settle it at zero and stop
+    // the sweep from ever reconsidering it. Leaving it entirely alone costs at
+    // most one cron tick, by which point Dograh has finalised the run.
+    if (!mode || duration <= 0) return null;
+
+    const row = {
+      account_id: accountId,
+      dograh_run_id: Number(run.id),
+      campaign_id: Number(run?.initial_context?.campaign_id) || null,
+      duration_seconds: duration,
+      call_mode: mode,
+      outcome: deriveOutcome(run),
+      phone_hash: hashPhone(run?.initial_context?.phone_number ?? run?.phone_number),
+      usage_info: run?.usage_info ?? null,
+      cost_info: run?.cost_info ?? null,
+      called_at: run?.created_at ?? new Date().toISOString(),
+    };
+
+    // Same insert-if-absent contract as meterCampaign: a run we have already
+    // metered is never rewritten, so this cannot alter the basis of a charge
+    // that has already been issued.
+    const { error } = await billing
+      .from('call_usage')
+      .upsert([row], { onConflict: 'dograh_run_id', ignoreDuplicates: true });
+
+    if (error) {
+      console.error('[meter] single-run upsert failed', { run: dograhRunId, error: error.message });
+      return null;
+    }
+
+    // Read back for the row id — whether we just inserted it or it was already
+    // there — because postDebit stamps billed_at on it by id.
+    const { data: stored } = await billing
+      .from('call_usage')
+      .select('id, dograh_run_id, duration_seconds, call_mode, outcome, usage_info, campaign_id')
+      .eq('dograh_run_id', dograhRunId)
+      .maybeSingle();
+
+    return (stored as any) ?? { ...row, id: undefined };
+  } catch (err: any) {
+    console.error('[meter] single-run failed', { run: dograhRunId, error: err?.message });
+    return null;
+  }
 }
 
 /** Pull runs for every campaign Dograh knows about. */

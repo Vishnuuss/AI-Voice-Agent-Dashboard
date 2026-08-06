@@ -100,6 +100,8 @@ export async function POST(request: Request) {
     }
 
     // ── Approve ──────────────────────────────────────────────────────────────
+    // Credits granted are credits_requested, NOT amount_inr. Those two now
+    // differ by the GST on the request, and tax must never become calling time.
     const credits = Number(req.credits_requested) || 0;
     if (credits <= 0) {
       return NextResponse.json({ error: 'Request has no credits on it.' }, { status: 400 });
@@ -116,7 +118,16 @@ export async function POST(request: Request) {
       p_description: `Credits added — ${credits.toLocaleString('en-IN')} credits`,
       p_external_ref: externalRef ?? req.reference_note ?? null,
       p_created_by: 'operator',
-      p_metadata: { topup_request_id: req.id, method: req.method },
+      p_metadata: {
+        topup_request_id: req.id,
+        method: req.method,
+        // The money side of the same event, kept on the ledger entry so the tax
+        // collected is recoverable from the ledger alone.
+        base_amount_inr: Number(req.base_amount_inr ?? credits),
+        gst_rate_percent: Number(req.gst_rate_percent ?? 0),
+        gst_amount_inr: Number(req.gst_amount_inr ?? 0),
+        amount_paid_inr: Number(req.amount_inr ?? credits),
+      },
     });
 
     if (postError) throw new Error(postError.message);

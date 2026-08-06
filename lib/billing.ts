@@ -178,6 +178,55 @@ export function creditsForSeconds(seconds: number, config: BillingConfig): numbe
 export const toCredits = (milli: number): number => Math.round(milli / 10) / 100;
 export const toMilli = (credits: number): number => Math.round(credits * MILLI_PER_CREDIT);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GST
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GST on a top-up. 18% is the rate for the service being sold here.
+ *
+ * The rate lives in ONE constant and every rupee figure the client is ever
+ * shown — the dialog, the UPI QR, the stored request, the operator queue — is
+ * derived from gstOn(). If it were computed in each place, the QR would sooner
+ * or later ask for a different amount than the screen above it, and every one of
+ * those payments would land as a mismatched manual reconciliation.
+ */
+export const GST_RATE_PERCENT = 18;
+
+export interface GstBreakdown {
+  /** Credits bought. 1 credit = Rs 1 of calling, and this is what gets credited. */
+  credits: number;
+  /** Rs before tax. */
+  baseInr: number;
+  gstRatePercent: number;
+  gstInr: number;
+  /** Rs actually payable — base + GST. This is what the QR carries. */
+  totalInr: number;
+}
+
+/**
+ * Rupees payable for a number of credits.
+ *
+ * GST is charged ON TOP: 1000 credits is Rs 1000 + Rs 180 = Rs 1180 payable,
+ * and the client still receives exactly 1000 credits of calling. Tax is not
+ * calling time, so it must never be turned into credits.
+ *
+ * Rounded to paise, then to whole rupees for the total, because a UPI QR
+ * carrying Rs 1180.00 is what the client's app will collect and an operator
+ * matching payments should not have to reason about fractions of a paisa.
+ */
+export function gstOn(credits: number, ratePercent: number = GST_RATE_PERCENT): GstBreakdown {
+  const base = Math.max(0, Math.round(Number(credits) || 0));
+  const gst = Math.round((base * ratePercent) / 100 * 100) / 100;
+  return {
+    credits: base,
+    baseInr: base,
+    gstRatePercent: ratePercent,
+    gstInr: gst,
+    totalInr: Math.round((base + gst) * 100) / 100,
+  };
+}
+
 /**
  * THE single place a call-debit idempotency key is constructed.
  *

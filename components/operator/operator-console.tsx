@@ -184,9 +184,18 @@ export function OperatorConsole() {
                           </TableCell>
                           <TableCell className="font-medium tabular-nums">
                             {t.credits_requested.toLocaleString('en-IN')}
+                            {/* amount_inr is the GROSS the client was asked for.
+                                Match the payment against THIS, not the credit
+                                value — GST makes the two differ. */}
                             <span className="ml-1 text-xs text-muted-foreground">
                               ({rs(Number(t.amount_inr))})
                             </span>
+                            {Number(t.gst_amount_inr) > 0 && (
+                              <div className="text-[11px] font-normal text-muted-foreground">
+                                {rs(Number(t.base_amount_inr))} + {Number(t.gst_rate_percent)}% GST{' '}
+                                {rs(Number(t.gst_amount_inr))}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="max-w-40 truncate font-mono text-xs">
                             {t.reference_note || '—'}

@@ -105,9 +105,15 @@ export interface TopupPayload {
   credits_per_minute: number;
   currency: string;
   presets: number[];
+  /** GST charged on top of the credits, as a percentage. Server-owned. */
+  gst_rate_percent: number;
   requests: {
     id: string;
     credits_requested: number;
+    base_amount_inr: number;
+    gst_rate_percent: number;
+    gst_amount_inr: number;
+    /** Gross — what was actually payable, GST included. */
     amount_inr: number;
     status: string;
     reference_note: string | null;

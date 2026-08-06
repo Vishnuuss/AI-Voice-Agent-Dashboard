@@ -38,7 +38,9 @@ export function TopUpDialog({
   const [reference, setReference] = useState('');
   const [step, setStep] = useState<'amount' | 'pay'>('amount');
   const [copied, setCopied] = useState(false);
-  const [qr, setQr] = useState<{ qr_data_url: string; upi_uri: string } | null>(null);
+  const [qr, setQr] = useState<
+    { qr_data_url: string; upi_uri: string; amount_inr: number } | null
+  >(null);
   const [qrError, setQrError] = useState<string | null>(null);
 
   // Fetch a QR carrying THIS amount once the client reaches the pay step, so
@@ -64,6 +66,16 @@ export function TopUpDialog({
   const payment: TopupPayload['payment'] = data?.payment ?? {};
   const minutes = perMinute > 0 ? Math.floor(credits / perMinute) : 0;
   const pending = (data?.requests ?? []).filter((r) => r.status === 'pending');
+
+  // GST is charged on top of the credits: 1000 credits = ₹1000 + 18% = ₹1180
+  // payable, and 1000 credits of calling. Mirrors gstOn() on the server; the QR
+  // is the authority for the figure actually collected, so once it has loaded
+  // we show its amount rather than this one.
+  const gstRate = data?.gst_rate_percent ?? 18;
+  const gstAmount = Math.round(credits * gstRate) / 100;
+  const totalPayable = qr?.amount_inr ?? credits + gstAmount;
+  const rs = (n: number) =>
+    `₹${n.toLocaleString('en-IN', { minimumFractionDigits: n % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
 
   function choose(value: number) {
     setCredits(value);
@@ -125,7 +137,8 @@ export function TopUpDialog({
                       {value.toLocaleString('en-IN')}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      ₹{value.toLocaleString('en-IN')} · ~{Math.floor(value / perMinute)} min
+                      {rs(value + Math.round(value * gstRate) / 100)} incl GST · ~
+                      {Math.floor(value / perMinute)} min
                     </div>
                   </button>
                 ))}
@@ -148,15 +161,29 @@ export function TopUpDialog({
                 />
               </div>
 
+              {/* The full bill, itemised. The client is asked for the gross
+                  figure, so showing only the credit value would be quoting an
+                  amount that does not match what their UPI app then demands. */}
               <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
-                <span className="font-medium tabular-nums">
-                  {credits.toLocaleString('en-IN')} credits
-                </span>
-                <span className="text-muted-foreground">
-                  {' '}= ₹{credits.toLocaleString('en-IN')}, about{' '}
-                  <span className="tabular-nums">{minutes.toLocaleString('en-IN')}</span> minutes
-                  of calling.
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">
+                    {credits.toLocaleString('en-IN')} credits
+                  </span>
+                  <span className="tabular-nums">{rs(credits)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-muted-foreground">GST {gstRate}%</span>
+                  <span className="tabular-nums">{rs(gstAmount)}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between border-t border-border pt-2 font-medium">
+                  <span>Total payable</span>
+                  <span className="tabular-nums">{rs(credits + gstAmount)}</span>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  You receive {credits.toLocaleString('en-IN')} credits — about{' '}
+                  <span className="tabular-nums">{minutes.toLocaleString('en-IN')}</span> minutes of
+                  calling. GST is a tax and is not added to your balance.
+                </p>
               </div>
 
               {pending.length > 0 && (
@@ -175,11 +202,14 @@ export function TopUpDialog({
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={qr.qr_data_url}
-                    alt={`Scan to pay ₹${credits}`}
+                    alt={`Scan to pay ${rs(totalPayable)}`}
                     className="size-48 object-contain"
                   />
                   <p className="text-xs font-medium text-neutral-700">
-                    Scan to pay ₹{credits.toLocaleString('en-IN')}
+                    Scan to pay {rs(totalPayable)}
+                  </p>
+                  <p className="text-[11px] text-neutral-500">
+                    {credits.toLocaleString('en-IN')} credits + {gstRate}% GST
                   </p>
                 </div>
               ) : qrError ? (
@@ -196,7 +226,7 @@ export function TopUpDialog({
                   scanning is impossible — this opens their UPI app directly. */}
               {qr && (
                 <Button variant="outline" className="w-full sm:hidden" render={<a href={qr.upi_uri} />}>
-                  Open UPI app to pay ₹{credits.toLocaleString('en-IN')}
+                  Open UPI app to pay {rs(totalPayable)}
                 </Button>
               )}
 

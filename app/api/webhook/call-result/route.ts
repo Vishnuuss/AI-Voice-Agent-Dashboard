@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { createServerClient } from '@/lib/supabase-server';
+import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
+import { getBillingConfig, postDebit, toCredits } from '@/lib/billing';
+import { meterSingleRun } from '@/lib/billing-meter';
+import { enforceBalanceGuard } from '@/lib/billing-guard';
 import { getMaxRetries } from '@/lib/call-behavior';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
@@ -30,6 +34,10 @@ import {
 
 const MAX_NOTES_LENGTH = 2_000;
 
+// The handler now also reads the run back from Dograh and posts the charge, so
+// give it room beyond the platform's short default.
+export const maxDuration = 30;
+
 /** Constant-time comparison so the secret cannot be recovered by timing the response. */
 function secretMatches(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -44,6 +52,55 @@ function presentedSecret(request: Request): string | null {
   const auth = request.headers.get('authorization');
   const bearer = auth?.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : null;
   return request.headers.get('x-api-key') ?? request.headers.get('x-webhook-secret') ?? bearer;
+}
+
+/**
+ * Charge for the call that just ended, right now.
+ *
+ * Billing used to happen ONLY on the ten-minute reconcile cron, so the balance
+ * the client watches during a campaign stayed frozen while calls completed.
+ * That is the bug: the meter was correct but invisibly late.
+ *
+ * This is a latency optimisation, not the correctness guarantee — the cron
+ * sweep is still what makes "no call escapes billing" true. Both paths build
+ * the idempotency key with debitIdempotencyKey(), so whichever runs second
+ * posts nothing. Consequently NOTHING here may throw or return an error: the
+ * webhook's job is to record the call, and a bad minute in accounting must not
+ * turn into a redelivery loop.
+ */
+async function chargeForRun(
+  clientDb: ReturnType<typeof createServerClient>,
+  runId: number | null,
+): Promise<void> {
+  if (!runId || !isBillingConfigured()) return;
+
+  try {
+    const billing = createBillingClient();
+    const config = await getBillingConfig(billing);
+
+    const call = await meterSingleRun(billing, runId);
+    if (!call) return;   // Unreadable from Dograh; the cron sweep will get it.
+
+    const debit = await postDebit(billing, call as any, config);
+    if (!debit.posted) return;
+
+    // Stop the calling immediately if that charge emptied the balance, rather
+    // than letting up to ten more minutes of calls run on credit.
+    if (debit.balanceMilli !== null) {
+      await enforceBalanceGuard(clientDb, config, debit.balanceMilli);
+    }
+
+    console.info('[webhook] charged call', {
+      run: runId,
+      credits: toCredits(debit.amountMilli),
+      balance_credits: debit.balanceMilli === null ? null : toCredits(debit.balanceMilli),
+    });
+  } catch (err: any) {
+    console.error('[webhook] inline billing failed; cron sweep will retry', {
+      run: runId,
+      error: err?.message,
+    });
+  }
 }
 
 export async function POST(request: Request) {
@@ -150,6 +207,10 @@ export async function POST(request: Request) {
     if (!lead) {
       // Acknowledge so the provider stops retrying an event we can never match.
       console.warn('[webhook] no matching lead for run', runId);
+      // Still bill it. A call we cannot match to a lead was still dialled, still
+      // connected and still cost money; the charge is metered from Dograh and
+      // does not depend on the lead at all.
+      await chargeForRun(supabase, runId);
       return NextResponse.json({ success: false, reason: 'lead_not_found' }, { status: 200 });
     }
 
@@ -266,6 +327,10 @@ export async function POST(request: Request) {
       // the idempotency barrier makes that retry safe.
       return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 });
     }
+
+    // Last, so the call record and the lead are already safe: the balance moves
+    // as soon as the call ends instead of on the next cron tick.
+    await chargeForRun(supabase, runId);
 
     return NextResponse.json({
       success: true,

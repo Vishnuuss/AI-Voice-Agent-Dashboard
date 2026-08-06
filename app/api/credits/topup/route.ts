@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
-import { getBillingConfig } from '@/lib/billing';
+import { getBillingConfig, gstOn, GST_RATE_PERCENT } from '@/lib/billing';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,7 +40,7 @@ export async function GET() {
 
     const { data: requests, error } = await billing
       .from('topup_requests')
-      .select('id, credits_requested, amount_inr, status, reference_note, requested_at, decided_at, decision_note')
+      .select('id, credits_requested, base_amount_inr, gst_rate_percent, gst_amount_inr, amount_inr, status, reference_note, requested_at, decided_at, decision_note')
       .eq('account_id', 'default')
       .order('requested_at', { ascending: false })
       .limit(10);
@@ -52,6 +52,9 @@ export async function GET() {
       credits_per_minute: (account?.rate_milli_per_minute ?? 4000) / 1000,
       currency: account?.currency ?? 'INR',
       presets: [500, 1000, 2500, 5000],
+      // The dialog must never do tax arithmetic of its own — it renders what
+      // this says, and the QR route computes the same figure from gstOn().
+      gst_rate_percent: GST_RATE_PERCENT,
       requests: requests ?? [],
     });
   } catch (err: any) {
@@ -98,18 +101,25 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1 credit = 1 rupee.
+    // 1 credit = 1 rupee of calling, plus GST on top. The client pays
+    // amount_inr; the credits he receives on approval stay credits_requested,
+    // because tax is not calling time.
+    const gst = gstOn(credits);
+
     const { data, error } = await billing
       .from('topup_requests')
       .insert({
         account_id: config.accountId,
         credits_requested: credits,
-        amount_inr: credits,
+        base_amount_inr: gst.baseInr,
+        gst_rate_percent: gst.gstRatePercent,
+        gst_amount_inr: gst.gstInr,
+        amount_inr: gst.totalInr,
         status: 'pending',
         method: 'manual_upi',
         reference_note: note,
       })
-      .select('id, credits_requested, amount_inr, status, requested_at')
+      .select('id, credits_requested, base_amount_inr, gst_rate_percent, gst_amount_inr, amount_inr, status, requested_at')
       .single();
 
     if (error) throw new Error(error.message);

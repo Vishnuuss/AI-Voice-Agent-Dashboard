@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
+import { gstOn } from '@/lib/billing';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,14 +49,19 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'No UPI ID has been set up yet.' }, { status: 404 });
     }
 
+    // The QR carries the GROSS amount — credits plus GST. It has to be the
+    // number the client is actually asked to pay, or the payment arrives short
+    // of the invoice and has to be chased by hand.
+    const gst = gstOn(credits);
+
     // Standard UPI deep link. `am` is the amount and `cu` the currency; every
     // Indian UPI app understands this form.
     const params = new URLSearchParams({
       pa: upiId,
       pn: String(payment.payee_name ?? 'BS Financial Services'),
-      am: String(credits),        // 1 credit = ₹1
+      am: gst.totalInr.toFixed(2),   // credits (₹1 each) + GST
       cu: 'INR',
-      tn: `${credits} calling credits`,
+      tn: `${credits} calling credits incl ${gst.gstRatePercent}% GST`,
     });
     const upiUri = `upi://pay?${params.toString()}`;
 
@@ -71,8 +77,11 @@ export async function GET(request: Request) {
       upi_uri: upiUri,
       upi_id: upiId,
       payee_name: payment.payee_name ?? 'BS Financial Services',
-      amount_inr: credits,
       credits,
+      base_amount_inr: gst.baseInr,
+      gst_rate_percent: gst.gstRatePercent,
+      gst_amount_inr: gst.gstInr,
+      amount_inr: gst.totalInr,
     });
   } catch (err: any) {
     console.error('[api/credits/topup/qr] failed', err?.message);
