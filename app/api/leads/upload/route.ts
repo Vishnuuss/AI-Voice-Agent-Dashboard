@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { DEFAULT_VERTICAL, parseVertical, VERTICALS } from '@/lib/verticals';
 
 /**
  * Lead ingestion goes through n8n (not straight to Supabase from here) — n8n's
@@ -22,7 +23,27 @@ export async function POST(request: Request) {
     // bug. Passing the raw bytes straight through sidesteps that entirely.
     const bodyBuffer = await request.arrayBuffer();
 
-    const webhookUrl = process.env.N8N_IMPORT_WEBHOOK_URL || FALLBACK_IMPORT_WEBHOOK_URL;
+    // The business line travels as a QUERY PARAMETER, not a form field.
+    //
+    // On a multipart upload n8n moves the file into $binary and leaves
+    // json.body as {} - confirmed on a real execution of the ingestion
+    // workflow - so a `vertical` form field could not be relied on to arrive.
+    // json.query is always populated, and it shows up in n8n's execution log,
+    // which makes a mis-tagged upload diagnosable after the fact instead of
+    // invisible. The raw body still passes through untouched.
+    const requested = new URL(request.url).searchParams.get('vertical');
+    const vertical = parseVertical(requested) ?? DEFAULT_VERTICAL;
+    if (requested && !parseVertical(requested)) {
+      // Guessing here would tag a whole file as the wrong business line and
+      // hand it to the wrong agent. Refuse instead.
+      return NextResponse.json(
+        { error: `Unknown business line "${requested}". Expected one of: ${VERTICALS.join(', ')}.` },
+        { status: 400 },
+      );
+    }
+
+    const baseUrl = process.env.N8N_IMPORT_WEBHOOK_URL || FALLBACK_IMPORT_WEBHOOK_URL;
+    const webhookUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}vertical=${encodeURIComponent(vertical)}`;
 
     const response = await fetch(webhookUrl, {
       method: 'POST',

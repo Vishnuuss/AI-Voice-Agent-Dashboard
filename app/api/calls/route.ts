@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { verticalFromParam } from '@/lib/verticals';
 
 /**
  * Call history, newest first.
@@ -32,7 +33,19 @@ export async function GET(request: Request) {
     const supabase = createServerClient();
 
     // Joined so the table can show who was called without an N+1 per row.
-    let query = supabase.from('call_logs').select('*, leads (id, name, phone, city)', { count: 'exact' });
+    //
+    // A call has no vertical of its own - it inherits the business line of the
+    // lead it was placed to, so the header switch filters through the join.
+    // `!inner` is required for that: with a plain join, filtering on a joined
+    // column returns every call row and merely nulls out the non-matching lead,
+    // which would show the right count but the wrong rows.
+    const vertical = verticalFromParam(searchParams.get('vertical'));
+    let query = vertical
+      ? supabase
+          .from('call_logs')
+          .select('*, leads!inner (id, name, phone, city, vertical)', { count: 'exact' })
+          .eq('leads.vertical', vertical)
+      : supabase.from('call_logs').select('*, leads (id, name, phone, city, vertical)', { count: 'exact' });
 
     if (outcome) {
       query = query.eq('outcome', outcome);

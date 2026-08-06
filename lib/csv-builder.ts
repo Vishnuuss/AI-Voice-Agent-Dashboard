@@ -13,8 +13,20 @@ function escapeCsvValue(val: any): string {
   return str;
 }
 
-export function buildCampaignCsv(leads: Pick<Lead, 'id' | 'name' | 'phone' | 'city' | 'property_type' | 'budget' | 'email'>[]): string {
-  const headers = ['phone_number', 'customer_name', 'city', 'property_type', 'budget', 'lead_id', 'email'];
+/**
+ * The CSV handed to Dograh for a campaign.
+ *
+ * `vertical` is included so the business line reaches the call itself: Dograh
+ * copies these columns into `initial_context`, the webhook template can echo
+ * one back, and the result handler can then tell that a solar call belongs to a
+ * solar lead. Without it every call came back with no business line at all, and
+ * the cross-line safety check in the webhook had nothing to compare against.
+ */
+export function buildCampaignCsv(
+  leads: Pick<Lead, 'id' | 'name' | 'phone' | 'city' | 'property_type' | 'budget' | 'email'>[],
+  vertical?: string,
+): string {
+  const headers = ['phone_number', 'customer_name', 'city', 'property_type', 'budget', 'lead_id', 'email', 'vertical'];
   
   const rows = leads.map(lead => {
     return [
@@ -24,7 +36,8 @@ export function buildCampaignCsv(leads: Pick<Lead, 'id' | 'name' | 'phone' | 'ci
       escapeCsvValue(lead.property_type),
       escapeCsvValue(lead.budget),
       escapeCsvValue(lead.id),
-      escapeCsvValue(lead.email)
+      escapeCsvValue(lead.email),
+      escapeCsvValue(vertical ?? '')
     ].join(',');
   });
 

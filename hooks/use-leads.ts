@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Lead, LeadStats, CallLog } from '@/types';
 import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
+import type { Vertical } from '@/lib/verticals';
+
+/** The header switch: one of the four business lines, or 'all'. */
+export type VerticalFilter = Vertical | 'all';
 
 export interface LeadQuery {
   /** Comma-separated list of leads.status values. */
@@ -26,7 +30,7 @@ export interface LeadQuery {
  * The totals were previously read from `data.totalCount` while the route returned
  * `pagination.total`, so the count was always 0 and the pager never rendered.
  */
-export function useLeads(query: string, filter: LeadQuery, page: number) {
+export function useLeads(query: string, filter: LeadQuery, page: number, vertical: VerticalFilter = 'all') {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
@@ -60,6 +64,11 @@ export function useLeads(query: string, filter: LeadQuery, page: number) {
       if (parsed.order) params.set('order', parsed.order);
       params.set('page', page.toString());
       params.set('limit', '20');
+      // 'all' is sent explicitly rather than omitted so the request URL always
+      // shows which business line produced a given list - the difference
+      // between "no leads" and "no leads in Solar" is worth being able to read
+      // straight off the network tab.
+      params.set('vertical', vertical);
 
       const response = await fetch(`/api/leads?${params.toString()}`, {
         signal: abortController.signal,
@@ -80,7 +89,7 @@ export function useLeads(query: string, filter: LeadQuery, page: number) {
     } finally {
       setIsLoading(false);
     }
-  }, [query, filterKey, page]);
+  }, [query, filterKey, page, vertical]);
 
   useEffect(() => {
     fetchLeads();
@@ -96,7 +105,7 @@ export function useLeads(query: string, filter: LeadQuery, page: number) {
   return { leads, totalCount, totalPages, isLoading, error, refresh: fetchLeads };
 }
 
-export function useLeadStats() {
+export function useLeadStats(vertical: VerticalFilter = 'all') {
   const [stats, setStats] = useState<LeadStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +123,7 @@ export function useLeadStats() {
     setError(null);
 
     try {
-      const response = await fetch('/api/leads/stats', {
+      const response = await fetch(`/api/leads/stats?vertical=${vertical}`, {
         signal: abortController.signal,
       });
 
@@ -131,7 +140,7 @@ export function useLeadStats() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [vertical]);
 
   useEffect(() => {
     fetchStats();

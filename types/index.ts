@@ -136,11 +136,26 @@ export interface DograhPresignedResponse {
   expires_in: number;
 }
 
+/**
+ * A Dograh run record as the API ACTUALLY returns it, verified 2026-08-06 against
+ * `GET /api/v1/campaign/{id}/runs` and `GET /api/v1/workflow/{id}/runs/{runId}`.
+ *
+ * `phone_number` and `status` were previously declared here as required top-level
+ * strings. They are not present at the top level at all - the phone number lives
+ * in `initial_context.phone_number`, and the outcome in
+ * `gathered_context.call_disposition`. Because the type promised them,
+ * lib/reconcile.ts read `run.phone_number` and got undefined on every record,
+ * which is why the reconcile sweep matched no leads. Typed optional here so the
+ * compiler stops vouching for fields the provider does not send.
+ */
 export interface DograhRunRecord {
   id: number;
-  phone_number: string;
-  status: string;
-  duration: number | null;
+  /** Not sent at the top level - see `initial_context.phone_number`. */
+  phone_number?: string | null;
+  /** Not sent at the top level - see `gathered_context.call_disposition`. */
+  status?: string | null;
+  duration?: number | null;
+  /** The CSV row the call was dialled from: phone_number, lead_id, campaign_id, ... */
   initial_context: Record<string, any> | null;
   gathered_context: Record<string, any> | null;
   recording_url: string | null;

@@ -10,6 +10,7 @@ import {
   parseFollowUpDate,
   usableMediaUrl,
 } from '@/lib/call-context';
+import { isWrongVerticalMatch } from '@/lib/verticals';
 import type { DograhRunRecord } from '@/types';
 
 const MAX_NOTES_LENGTH = 2_000;
@@ -42,8 +43,22 @@ export async function applyRunResult(
   if (existingLog) return 'duplicate';
 
   const context: Record<string, any> = run.gathered_context ?? {};
-  const leadId = run.metadata?.lead_id ?? context.lead_id ?? null;
-  const phone = run.phone_number ?? run.phone ?? null;
+  // The CSV row this call was dialled from. THIS is where Dograh puts the
+  // identifiers - verified 2026-08-06 against a live record from the same
+  // endpoint this sweep reads (GET /api/v1/campaign/{id}/runs):
+  //
+  //   metadata          -> null
+  //   gathered_context  -> {call_disposition, call_id, call_tags,
+  //                         mapped_call_disposition, provider}   (no lead_id)
+  //   phone_number/phone at top level -> absent
+  //   initial_context   -> {phone_number, customer_name, lead_id, campaign_id, ...}
+  //
+  // Reading only the first three meant leadId and phone were BOTH null on every
+  // run, so this function returned 'no_lead' every time and the missed-call
+  // sweep had never recovered a single call.
+  const initial: Record<string, any> = (run as any).initial_context ?? {};
+  const leadId = run.metadata?.lead_id ?? context.lead_id ?? initial.lead_id ?? null;
+  const phone = run.phone_number ?? (run as any).phone ?? initial.phone_number ?? null;
 
   let lead: any = null;
   if (leadId) {
@@ -57,7 +72,22 @@ export async function applyRunResult(
       .eq('phone', phone)
       .order('last_attempt_at', { ascending: false, nullsFirst: false })
       .limit(1);
-    lead = data?.[0] ?? null;
+    const candidate = data?.[0] ?? null;
+
+    // A phone match is a GUESS once the same number can be a lead in more than
+    // one business line. If the agent named the business line it was calling
+    // for and it disagrees with this lead's, drop the match rather than write a
+    // solar call's result onto a loan lead. Inert until both sides carry a
+    // vertical - see isWrongVerticalMatch.
+    const expectedVertical = context.vertical ?? initial.vertical ?? null;
+    if (candidate && isWrongVerticalMatch(candidate.vertical, expectedVertical)) {
+      console.warn(
+        '[reconcile] phone matched a lead in a different business line; refusing it',
+        { runId, leadVertical: candidate.vertical, expected: expectedVertical },
+      );
+    } else {
+      lead = candidate;
+    }
   }
 
   if (!lead) return 'no_lead';
@@ -84,7 +114,7 @@ export async function applyRunResult(
     duration: (run as any).cost_info?.call_duration_seconds ?? run.duration,
   });
 
-  const gatheredContext = { ...context, ...buildGatheredContext(signals, result.outcome) };
+  const gatheredContext = { ...context, ...buildGatheredContext(signals, result.outcome, undefined, lead.vertical) };
 
   // Same QA verdict the webhook stores, recovered here for any call whose
   // webhook delivery was missed.

@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
-    
-    const { data: leads, error } = await supabase
-      .from('leads')
-      .select('source');
+
+    const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
+    const { data: leads, error } = await applyVerticalFilter(
+      supabase.from('leads').select('source'),
+      vertical,
+    );
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

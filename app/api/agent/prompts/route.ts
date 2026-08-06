@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DograhApiError, DograhClient, DograhConfigError, dograh } from '@/lib/dograh';
+import { DEFAULT_VERTICAL, parseVertical, VERTICAL_LABELS } from '@/lib/verticals';
 
 /**
  * Lets the dashboard edit the agent's spoken text directly, instead of that
@@ -20,9 +21,49 @@ const NODE_TYPE_TO_KEY: Record<string, 'global' | 'start' | 'agenda' | 'end'> = 
 const PROMPT_KEYS = ['global', 'start', 'agenda', 'end'] as const;
 const MAX_PROMPT_LENGTH = 4000;
 
-function resolveWorkflowId(): number {
-  const id = Number.parseInt(process.env.DOGRAH_WORKFLOW_ID ?? '', 10);
-  if (!Number.isFinite(id)) throw new DograhConfigError('DOGRAH_WORKFLOW_ID is not set.');
+/**
+ * What the caller actually HEARS from a node, which is not always `data.prompt`.
+ *
+ * A startCall node with `greeting_type: 'text'` - which is how workflow 1 is
+ * configured - speaks `data.greeting` verbatim and ignores `data.prompt`
+ * entirely. This page read and wrote `prompt`, so editing the opening greeting
+ * changed a field the agent never reads: the button worked, the toast said
+ * "Saved and published", and the caller kept hearing the old line. The two
+ * fields had already drifted apart on the live workflow.
+ *
+ * Reads prefer `greeting` on a start node; writes set BOTH, so the spoken line
+ * changes whether the node is in `text` mode (greeting) or `llm` mode (prompt),
+ * and the two can never drift again.
+ */
+function readNodeText(node: any): string {
+  if (node?.type === 'startCall') return node.data?.greeting ?? node.data?.prompt ?? '';
+  return node?.data?.prompt ?? '';
+}
+
+/**
+ * Which agent's script this page is editing.
+ *
+ * This route had its own copy of the single-workflow assumption, so once more
+ * than one business line exists the AI Agent page would have edited the LOAN
+ * agent's spoken text no matter which vertical was selected on screen - quietly
+ * changing what a live agent says to real customers.
+ *
+ * Mirrors the mapping in app/api/campaigns/route.ts deliberately: loan falls
+ * back to the original DOGRAH_WORKFLOW_ID, the others must be set explicitly.
+ */
+function resolveWorkflowId(verticalParam: string | null): number {
+  const vertical = parseVertical(verticalParam ?? DEFAULT_VERTICAL) ?? DEFAULT_VERTICAL;
+  const raw =
+    vertical === 'loan'
+      ? process.env.DOGRAH_WORKFLOW_ID_LOAN ?? process.env.DOGRAH_WORKFLOW_ID
+      : process.env[`DOGRAH_WORKFLOW_ID_${vertical.toUpperCase()}`];
+
+  const id = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(id)) {
+    throw new DograhConfigError(
+      `No calling agent is configured for the ${VERTICAL_LABELS[vertical]} business line, so there is no script to edit.`,
+    );
+  }
   return id;
 }
 
@@ -41,19 +82,19 @@ function handleDograhError(context: string, error: unknown) {
   return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     if (!DograhClient.isConfigured()) {
       return NextResponse.json({ error: 'Calling provider is not configured.' }, { status: 503 });
     }
 
-    const workflowId = resolveWorkflowId();
+    const workflowId = resolveWorkflowId(new URL(request.url).searchParams.get('vertical'));
     const workflow = await dograh.getWorkflow(workflowId);
 
     const prompts: Record<string, string> = {};
     for (const node of workflow.workflow_definition?.nodes ?? []) {
       const key = NODE_TYPE_TO_KEY[node.type];
-      if (key) prompts[key] = node.data?.prompt ?? '';
+      if (key) prompts[key] = readNodeText(node);
     }
 
     return NextResponse.json({
@@ -93,7 +134,10 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: 'No prompt text provided. Send at least one of: global, start, agenda, end.' }, { status: 400 });
     }
 
-    const workflowId = resolveWorkflowId();
+    // Taken from the query string, not the body, so it matches the GET that
+    // loaded these prompts - editing one agent's script and saving it onto
+    // another's is exactly the mistake this guards against.
+    const workflowId = resolveWorkflowId(new URL(request.url).searchParams.get('vertical'));
 
     // Fetch-modify-publish against the LIVE definition, same pattern used
     // manually via the API all session - only the requested node.data.prompt
@@ -107,6 +151,9 @@ export async function PUT(request: Request) {
       const key = NODE_TYPE_TO_KEY[node.type];
       if (key && updates[key] !== undefined) {
         node.data.prompt = updates[key];
+        // A startCall node in `text` mode speaks `greeting`, not `prompt`.
+        // Writing both is what makes the edit actually reach the caller.
+        if (node.type === 'startCall') node.data.greeting = updates[key];
         changed++;
       }
     }

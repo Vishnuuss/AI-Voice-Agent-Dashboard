@@ -205,6 +205,21 @@ export const QUALIFIED_THRESHOLD = 60;
 /** Calls shorter than this were effectively not real conversations. */
 const MIN_CONVERSATION_SECONDS = 10;
 
+/**
+ * The floor for someone who actually held a conversation.
+ *
+ * Zero is reserved for a real refusal - "no", "do not call", wrong number - and
+ * for calls that never connected. A person who picked up, stayed on the line and
+ * talked, but never got as far as naming a budget or a type, is NOT the same
+ * lead as someone who said no: they answered, they engaged, and they are worth
+ * another attempt. Scoring both of them 0 makes the two indistinguishable in the
+ * dashboard and in any export the client works from.
+ *
+ * Deliberately well below QUALIFIED_THRESHOLD - this is "worth a second look",
+ * never "qualified".
+ */
+export const ENGAGED_SCORE = 25;
+
 export function scoreCall(input: ScoreInput): ScoreResult {
   const outcome = normaliseOutcome(input.outcome);
   const answered = isAnswered(outcome);
@@ -277,6 +292,23 @@ export function scoreCall(input: ScoreInput): ScoreResult {
   if (durationSeconds >= MIN_CONVERSATION_SECONDS) score += 10;
 
   score = Math.max(0, Math.min(score, 100));
+
+  // The engaged floor. Reaching here means the call connected and the caller
+  // never refused - they simply did not answer the qualifying questions. That is
+  // a warmer lead than a flat no, so it must not share the same score. Only
+  // applied to calls long enough to have been a real conversation; a three-second
+  // pickup-and-hangup stays where the arithmetic put it.
+  if (durationSeconds >= MIN_CONVERSATION_SECONDS && score < ENGAGED_SCORE) {
+    return {
+      score: ENGAGED_SCORE,
+      scoredBy: 'rules',
+      reason: 'Talked but gave no usable answers — did not refuse, so worth another try',
+      qualification: 'not_qualified',
+      outcome,
+      answered,
+      durationSeconds,
+    };
+  }
 
   return {
     score,

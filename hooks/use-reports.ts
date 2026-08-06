@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
+import type { VerticalFilter } from './use-leads';
 
 export interface DailyPoint {
   date: string;
@@ -20,7 +21,7 @@ export interface OverviewPoint {
  * Replaces the hard-coded Mon-Sun sample series the dashboard shipped with,
  * which showed invented traffic on a deployment that had never placed a call.
  */
-export function useOverview(range = 7) {
+export function useOverview(range = 7, vertical: VerticalFilter = 'all') {
   const [data, setData] = useState<OverviewPoint[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +39,7 @@ export function useOverview(range = 7) {
     setError(null);
 
     try {
-      const response = await fetch(`/api/reports/overview?range=${range}`, {
+      const response = await fetch(`/api/reports/overview?range=${range}&vertical=${vertical}`, {
         signal: abortController.signal,
       });
 
@@ -63,7 +64,7 @@ export function useOverview(range = 7) {
     } finally {
       setIsLoading(false);
     }
-  }, [range]);
+  }, [range, vertical]);
 
   useEffect(() => {
     fetchOverview();
@@ -127,8 +128,8 @@ export interface SourcePoint {
 }
 
 /** Lead source split. The Reports page previously drew a hard-coded empty pie. */
-export function useSources() {
-  return useJson<SourcePoint[]>('/api/reports/sources', (p) => p.data ?? [], []);
+export function useSources(vertical: VerticalFilter = 'all') {
+  return useJson<SourcePoint[]>(`/api/reports/sources?vertical=${vertical}`, (p) => p.data ?? [], []);
 }
 
 export interface WeeklyPoint {
@@ -138,8 +139,8 @@ export interface WeeklyPoint {
   qualified: number;
 }
 
-export function useWeekly() {
-  return useJson<WeeklyPoint[]>('/api/reports/weekly', (p) => p.data ?? [], []);
+export function useWeekly(vertical: VerticalFilter = 'all') {
+  return useJson<WeeklyPoint[]>(`/api/reports/weekly?vertical=${vertical}`, (p) => p.data ?? [], []);
 }
 
 export interface ServiceHealth {
@@ -179,6 +180,6 @@ export interface QualityPayload {
  * What the AI agent is getting wrong, aggregated from Dograh's per-call QA
  * verdicts. This is the feedback loop: fix the top row, watch it shrink.
  */
-export function useQuality(days = 30) {
-  return useJson<QualityPayload | null>(`/api/reports/quality?days=${days}`, (p) => p, null, 60_000);
+export function useQuality(days = 30, vertical: VerticalFilter = 'all') {
+  return useJson<QualityPayload | null>(`/api/reports/quality?days=${days}&vertical=${vertical}`, (p) => p, null, 60_000);
 }

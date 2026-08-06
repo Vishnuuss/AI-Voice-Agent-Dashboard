@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { verticalFromParam } from '@/lib/verticals';
 
 export async function GET(request: Request) {
   try {
@@ -10,10 +11,18 @@ export async function GET(request: Request) {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - range);
     
-    const { data: calls, error } = await supabase
-      .from('call_logs')
-      .select('created_at, outcome, leads (qualification)')
-      .gte('created_at', startDate.toISOString());
+    // Scoped to the header switch. `!inner` is required when filtering on the
+    // joined lead: a plain join would keep every call row and merely null the
+    // lead, so the chart would show other business lines' calls.
+    const vertical = verticalFromParam(searchParams.get('vertical'));
+    const base = vertical
+      ? supabase
+          .from('call_logs')
+          .select('created_at, outcome, leads!inner (qualification, vertical)')
+          .eq('leads.vertical', vertical)
+      : supabase.from('call_logs').select('created_at, outcome, leads (qualification)');
+
+    const { data: calls, error } = await base.gte('created_at', startDate.toISOString());
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

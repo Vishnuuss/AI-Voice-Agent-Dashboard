@@ -316,6 +316,13 @@ export function buildGatheredContext(
   signals: CallSignals,
   outcome: string,
   scoring?: { score: number; scoredBy: string; reason: string },
+  /**
+   * The business line of the LEAD this call belongs to, used when the agent
+   * did not name one itself. Without it every call was stored as `loan`,
+   * because extractCallSignals defaults an absent vertical to DEFAULT_VERTICAL
+   * - so a solar call's history would have read "100 from Loan".
+   */
+  leadVertical?: unknown,
 ): Record<string, any> {
   const context: Record<string, any> = { call_outcome: outcome };
   if (scoring) {
@@ -336,7 +343,11 @@ export function buildGatheredContext(
   if (signals.qualified_flag !== null) context.agent_qualified = signals.qualified_flag;
   // Always stored: the dashboard shows "100 from loan", so the business line has
   // to travel with the score even when every other field came back empty.
-  context.vertical = signals.vertical ?? DEFAULT_VERTICAL;
+  //
+  // Order matters. The agent's own claim wins (it knows which script it ran),
+  // then the lead's column, and only then the default - so a solar call is
+  // never filed under loan just because the agent stayed quiet about it.
+  context.vertical = parseVertical(signals.vertical) ?? parseVertical(leadVertical) ?? DEFAULT_VERTICAL;
   if (signals.lead_score) context.agent_lead_score = signals.lead_score;
   return context;
 }

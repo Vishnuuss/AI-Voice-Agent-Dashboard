@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
 
 /** Columns a client is allowed to sort by - anything else is a PostgREST error. */
 const SORTABLE = new Set([
@@ -39,6 +40,10 @@ export async function GET(request: Request) {
     const supabase = createServerClient();
 
     let query = supabase.from('leads').select('*', { count: 'exact' });
+
+    // The dashboard's header switch. "all" (or absent) means no filter, so leads
+    // written before the vertical column existed still appear.
+    query = applyVerticalFilter(query, verticalFromParam(searchParams.get('vertical')));
 
     const term = sanitiseSearch(search);
     if (term) {

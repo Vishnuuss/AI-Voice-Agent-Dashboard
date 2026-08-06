@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CallLog, CallStats } from '@/types';
 import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
+import type { VerticalFilter } from './use-leads';
 
 /**
  * Call history.
@@ -10,7 +11,7 @@ import { DEFAULT_POLL_MS, useAutoRefresh } from './use-polling';
  * the totals were read from `data.totalCount` while the route returned
  * `pagination.total`; and nothing ever refetched, so new calls never appeared.
  */
-export function useCalls(filter: string, page = 1, search = '') {
+export function useCalls(filter: string, page = 1, search = '', vertical: VerticalFilter = 'all') {
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
@@ -35,6 +36,7 @@ export function useCalls(filter: string, page = 1, search = '') {
       if (search) params.set('search', search);
       params.set('page', String(page));
       params.set('limit', '20');
+      params.set('vertical', vertical);
 
       const response = await fetch(`/api/calls?${params.toString()}`, {
         signal: abortController.signal,
@@ -55,7 +57,7 @@ export function useCalls(filter: string, page = 1, search = '') {
     } finally {
       setIsLoading(false);
     }
-  }, [filter, page, search]);
+  }, [filter, page, search, vertical]);
 
   useEffect(() => {
     fetchCalls();
@@ -71,7 +73,7 @@ export function useCalls(filter: string, page = 1, search = '') {
   return { calls, totalCount, totalPages, isLoading, error, refresh: fetchCalls };
 }
 
-export function useCallStats() {
+export function useCallStats(vertical: VerticalFilter = 'all') {
   const [stats, setStats] = useState<CallStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export function useCallStats() {
     setError(null);
 
     try {
-      const response = await fetch('/api/calls/stats', {
+      const response = await fetch(`/api/calls/stats?vertical=${vertical}`, {
         signal: abortController.signal,
       });
 
@@ -106,7 +108,7 @@ export function useCallStats() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [vertical]);
 
   useEffect(() => {
     fetchStats();

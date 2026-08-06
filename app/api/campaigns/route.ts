@@ -7,6 +7,29 @@ import { applyLeadSegmentFilter, isValidLeadSegment, segmentNoEligibleLeadsMessa
 import { getCallBehaviorSettings } from '@/lib/call-behavior';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { getBillingConfig, toCredits } from '@/lib/billing';
+import {
+  DEFAULT_VERTICAL,
+  parseVertical,
+  VERTICAL_LABELS,
+  verticalFromParam,
+  type Vertical,
+} from '@/lib/verticals';
+
+/**
+ * Which Dograh agent to dial each business line with.
+ *
+ * Loan falls back to the original single DOGRAH_WORKFLOW_ID so the live loan
+ * campaign keeps working unchanged through this transition. The other three
+ * have NO fallback on purpose: an unset id must refuse the launch, never
+ * quietly dial a real-estate list with the loan script. That failure would be
+ * invisible from the dashboard and audible only to the customer.
+ */
+const WORKFLOW_ENV_BY_VERTICAL: Record<Vertical, string | undefined> = {
+  loan: process.env.DOGRAH_WORKFLOW_ID_LOAN ?? process.env.DOGRAH_WORKFLOW_ID,
+  realestate: process.env.DOGRAH_WORKFLOW_ID_REALESTATE,
+  solar: process.env.DOGRAH_WORKFLOW_ID_SOLAR,
+  investing: process.env.DOGRAH_WORKFLOW_ID_INVESTING,
+};
 
 /** Statuses that mean "a launch for this name is already in flight". */
 const IN_FLIGHT = ['pending', 'queued', 'running', 'paused'];
@@ -16,13 +39,19 @@ const MAX_LEADS_PER_CAMPAIGN = 5_000;
 /** Cap on how many campaigns we reconcile per GET so the list never fans out unbounded. */
 const RECONCILE_LIMIT = 10;
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
-    const { data: campaigns, error } = await supabase
-      .from('campaign_runs')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
+    // Written as a conditional rather than through applyVerticalFilter so the
+    // row type survives - the shared helper is untyped, and routing the query
+    // through it turned `campaigns` into any[], costing the type-checking on
+    // the reconcile block below.
+    const base = supabase.from('campaign_runs').select('*');
+    const { data: campaigns, error } = await (vertical ? base.eq('vertical', vertical) : base).order(
+      'created_at',
+      { ascending: false },
+    );
 
     if (error) {
       console.error('[campaigns:GET] query failed', error);
@@ -116,6 +145,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `lead_segment must be one of: new, retry_pending, follow_up, unreachable` }, { status: 400 });
     }
     const leadSegment = rawSegment as LeadSegment;
+
+    // Which business line this campaign calls. Defaults to loan so any existing
+    // caller that omits it behaves exactly as before.
+    const vertical = parseVertical(body.vertical ?? DEFAULT_VERTICAL) ?? DEFAULT_VERTICAL;
+
+    // Checked HERE, before a single lead is claimed. Doing it at Step 5 (where
+    // the id is actually used) would mean a misconfigured vertical claims the
+    // leads, flips them to `queued`, and only then throws - and while the
+    // rollback path would release them, refusing before touching anything is
+    // the version that cannot go wrong.
+    if (!Number.isFinite(Number.parseInt(WORKFLOW_ENV_BY_VERTICAL[vertical] ?? '', 10))) {
+      return NextResponse.json(
+        {
+          error:
+            `No calling agent is configured for the ${VERTICAL_LABELS[vertical]} business line yet, ` +
+            `so this campaign was not started. Set DOGRAH_WORKFLOW_ID_${vertical.toUpperCase()} once its agent is built.`,
+        },
+        { status: 400 },
+      );
+    }
 
     const requestedCount = Number(lead_count);
     if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > MAX_LEADS_PER_CAMPAIGN) {
@@ -239,6 +288,9 @@ export async function POST(request: Request) {
         requested_count: requestedCount,
         concurrency: safeConcurrency,
         status: 'pending',
+        // Recorded so campaign history stays attributable to a business line
+        // even after the leads it called have moved on.
+        vertical,
         // lead_segment recorded here too (not just implied by which leads got
         // claimed) so a later campaign list can show what was actually targeted.
         target_segment: { ...(target_segment ?? {}), lead_segment: leadSegment },
@@ -264,6 +316,7 @@ export async function POST(request: Request) {
       supabase.from('leads').select('id, status, follow_up_date').not('phone', 'is', null),
       leadSegment,
       callGapMinutes,
+      vertical,
     );
 
     if (target_segment?.city) query = query.eq('city', target_segment.city);
@@ -307,6 +360,11 @@ export async function POST(request: Request) {
         ),
       leadSegment,
       callGapMinutes,
+      // Re-applied at claim time as well: this is a compare-and-set, so every
+      // condition that made a lead eligible must still hold when it is claimed.
+      // Without it a concurrent solar launch could claim a lead this loan
+      // campaign is about to dial.
+      vertical,
     ).select('id, name, phone, city, property_type, budget, email');
 
     if (claimError) {
@@ -326,15 +384,18 @@ export async function POST(request: Request) {
     priorLeadState = new Map(candidates.map((l: any) => [l.id, { status: l.status, follow_up_date: l.follow_up_date }]));
 
     // --- Step 4: build + upload the CSV of ACTUALLY claimed leads ---------
-    const csvString = buildCampaignCsv(claimed);
+    const csvString = buildCampaignCsv(claimed, vertical);
     const filename = `campaign_${name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${Date.now()}.csv`;
     const presigned = await dograh.getPresignedUploadUrl(filename, Buffer.byteLength(csvString, 'utf-8'));
     await dograh.uploadCsvToS3(presigned.upload_url, csvString);
 
     // --- Step 5: create the campaign at the provider ----------------------
-    const workflowId = Number.parseInt(process.env.DOGRAH_WORKFLOW_ID ?? '', 10);
+    // Resolved from the vertical, and validated BEFORE any leads were claimed
+    // (see the guard near the top of the try block) - by this point it can only
+    // be a real id.
+    const workflowId = Number.parseInt(WORKFLOW_ENV_BY_VERTICAL[vertical] ?? '', 10);
     if (!Number.isFinite(workflowId)) {
-      throw new Error('DOGRAH_WORKFLOW_ID is not set to a valid workflow id.');
+      throw new Error(`No calling agent is configured for the ${VERTICAL_LABELS[vertical]} business line.`);
     }
 
     const dograhCampaign = await dograh.createCampaign({

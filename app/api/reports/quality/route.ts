@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { verticalFromParam } from '@/lib/verticals';
 
 /**
  * Aggregated call-quality problems, so recurring agent faults are visible
@@ -41,9 +42,15 @@ export async function GET(request: Request) {
     since.setDate(since.getDate() - days);
 
     const supabase = createServerClient();
-    const { data, error } = await supabase
-      .from('call_logs')
-      .select('id, called_at, duration, outcome, gathered_context, lead_id')
+    const vertical = verticalFromParam(searchParams.get('vertical'));
+    const qualityBase = vertical
+      ? supabase
+          .from('call_logs')
+          .select('id, called_at, duration, outcome, gathered_context, lead_id, leads!inner(vertical)')
+          .eq('leads.vertical', vertical)
+      : supabase.from('call_logs').select('id, called_at, duration, outcome, gathered_context, lead_id');
+
+    const { data, error } = await qualityBase
       .gte('called_at', since.toISOString())
       .order('called_at', { ascending: false })
       .limit(1000);

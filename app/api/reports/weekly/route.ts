@@ -1,15 +1,27 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
     const fourWeeksAgo = new Date();
     fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
-    
+
+    // Both halves of this report must be scoped the same way, or the weekly
+    // chart would plot one business line's leads against every business line's
+    // calls and read as a collapse in connect rate.
+    const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
+    const callsBase = vertical
+      ? supabase.from('call_logs').select('created_at, leads!inner(vertical)').eq('leads.vertical', vertical)
+      : supabase.from('call_logs').select('created_at');
+
     const [leadsRes, callsRes] = await Promise.all([
-      supabase.from('leads').select('created_at, qualification').gte('created_at', fourWeeksAgo.toISOString()),
-      supabase.from('call_logs').select('created_at').gte('created_at', fourWeeksAgo.toISOString())
+      applyVerticalFilter(
+        supabase.from('leads').select('created_at, qualification'),
+        vertical,
+      ).gte('created_at', fourWeeksAgo.toISOString()),
+      callsBase.gte('created_at', fourWeeksAgo.toISOString())
     ]);
 
     if (leadsRes.error) throw leadsRes.error;

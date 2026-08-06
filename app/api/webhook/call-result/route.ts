@@ -7,6 +7,7 @@ import { meterSingleRun } from '@/lib/billing-meter';
 import { enforceBalanceGuard } from '@/lib/billing-guard';
 import { getMaxRetries } from '@/lib/call-behavior';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
+import { isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
 import {
   buildGatheredContext,
   buildNoteLine,
@@ -179,6 +180,16 @@ export async function POST(request: Request) {
       const { data } = await supabase.from('leads').select('*').eq('id', leadIdFromPayload).maybeSingle();
       lead = data;
     }
+    // The business line this call was FOR, taken raw from the payload and left
+    // null when the agent did not say. Deliberately NOT signals.vertical: that
+    // one applies DEFAULT_VERTICAL ('loan') whenever the field is absent, so an
+    // agent that simply forgets to send `vertical` would look like it said
+    // "loan" and every real-estate result matched by phone would be thrown away.
+    // Null here means "no opinion", which leaves the guard below inert.
+    const expectedVertical = parseVertical(
+      flat.vertical ?? flat.business_line ?? flat.product_line ?? flat.agent_type,
+    );
+
     if (!lead && phone) {
       // Phone is not guaranteed unique, so take the most recently contacted match.
       // Also try the bare 10-digit form: the CSV stores +91XXXXXXXXXX but some
@@ -197,10 +208,26 @@ export async function POST(request: Request) {
           .eq('phone', candidate)
           .order('last_attempt_at', { ascending: false, nullsFirst: false })
           .limit(1);
-        if (data?.[0]) {
-          lead = data[0];
-          break;
+        const match = data?.[0];
+        if (!match) continue;
+
+        // Matching by phone is a guess once the same number can be a lead in
+        // more than one business line - `leads.phone` is no longer unique. If
+        // this call's agent named its business line and it disagrees with the
+        // lead's, refuse the match: an unmatched call is a logged warning, but
+        // writing a solar call's score and recording onto the same person's
+        // loan lead is invisible and corrupts what the client bills from.
+        if (isWrongVerticalMatch(match.vertical, expectedVertical)) {
+          console.warn('[webhook] phone matched a lead in a different business line; refusing it', {
+            runId,
+            leadVertical: match.vertical,
+            expected: expectedVertical,
+          });
+          continue;
         }
+
+        lead = match;
+        break;
       }
     }
 
@@ -231,11 +258,12 @@ export async function POST(request: Request) {
       lead_score: signals.lead_score,
     });
 
-    const gatheredContext = buildGatheredContext(signals, result.outcome, {
-      score: result.score,
-      scoredBy: result.scoredBy,
-      reason: result.reason,
-    });
+    const gatheredContext = buildGatheredContext(
+      signals,
+      result.outcome,
+      { score: result.score, scoredBy: result.scoredBy, reason: result.reason },
+      lead.vertical,
+    );
 
     // Dograh's QA node grades the call (DEAD_AIR, HEARING_ISSUES, READ_OPTION_LIST,
     // GUESSED_MISHEARD, ...). Storing it here is what turns the dashboard into a

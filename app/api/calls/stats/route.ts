@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { verticalFromParam } from '@/lib/verticals';
 
 const PAGE = 1_000;
 const MAX_ROWS = 50_000;
@@ -13,15 +14,22 @@ const MAX_ROWS = 50_000;
  *  - a bare select() is capped at 1000 rows by PostgREST, so every number silently
  *    stopped growing once the table passed a thousand calls. This pages through.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
+    // A call inherits its business line from the lead it was placed to, so the
+    // header switch filters through the join. `!inner` matters: with a plain
+    // join, filtering a joined column keeps every call row and merely nulls the
+    // lead, which would leave these totals counting other verticals' calls.
+    const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
 
     const rows: { outcome: string | null; duration: number | null; called_at: string }[] = [];
     for (let from = 0; from < MAX_ROWS; from += PAGE) {
-      const { data, error } = await supabase
-        .from('call_logs')
-        .select('outcome, duration, called_at')
+      const base = vertical
+        ? supabase.from('call_logs').select('outcome, duration, called_at, leads!inner(vertical)').eq('leads.vertical', vertical)
+        : supabase.from('call_logs').select('outcome, duration, called_at');
+
+      const { data, error } = await base
         .order('called_at', { ascending: false })
         .range(from, from + PAGE - 1);
 

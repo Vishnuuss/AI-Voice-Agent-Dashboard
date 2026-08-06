@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
+import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
-    
-    const { data: leads, error } = await supabase
-      .from('leads')
-      .select('*')
-      .order('created_at', { ascending: false });
+
+    const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
+    const { data: leads, error } = await applyVerticalFilter(
+      supabase.from('leads').select('*'),
+      vertical,
+    ).order('created_at', { ascending: false });
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
@@ -22,7 +24,7 @@ export async function GET() {
     // loan officer - a name and a score alone do not say what to call about.
     // score_reason travels with the score so an exported list is auditable.
     const headers = [
-      'id', 'name', 'phone', 'email', 'city', 'status', 'qualification', 'score',
+      'id', 'name', 'phone', 'email', 'city', 'vertical', 'status', 'qualification', 'score',
       'loan_type', 'budget', 'score_reason', 'created_at', 'call_outcome',
     ];
     const csvRows = [];
@@ -35,6 +37,9 @@ export async function GET() {
         lead.phone,
         lead.email || '',
         `"${(lead.city || '').replace(/"/g, '""')}"`,
+        // An export of "All" mixes four business lines, so each row has to say
+        // which one it is or the file cannot be split up again afterwards.
+        lead.vertical || '',
         lead.status,
         lead.qualification || '',
         lead.score || 0,

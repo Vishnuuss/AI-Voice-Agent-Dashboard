@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CampaignRun, CampaignStats, DograhCampaignProgress } from '@/types';
 import type { LeadSegment } from '@/lib/lead-segments';
 import { DEFAULT_POLL_MS, useAutoRefresh, usePolling } from './use-polling';
+import type { VerticalFilter } from './use-leads';
 
 export interface LeadSegmentCount {
   value: LeadSegment;
@@ -11,8 +12,13 @@ export interface LeadSegmentCount {
 }
 
 /** Live counts behind the Start Campaign dialog's segment dropdown. */
-export function useLeadSegmentCounts(enabled = true) {
+export function useLeadSegmentCounts(enabled = true, vertical: VerticalFilter = 'all') {
   const [segments, setSegments] = useState<LeadSegmentCount[]>([]);
+  // Callbacks scheduled for a FUTURE date. They are not launchable yet, but
+  // without them the dialog shows a bare "Follow-ups due (0)" while the sidebar
+  // badge says 1, which reads as a broken screen.
+  const [followUpUpcoming, setFollowUpUpcoming] = useState(0);
+  const [followUpNextDue, setFollowUpNextDue] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -23,16 +29,18 @@ export function useLeadSegmentCounts(enabled = true) {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/campaigns/segments', { signal: abortController.signal });
+      const response = await fetch(`/api/campaigns/segments?vertical=${vertical}`, { signal: abortController.signal });
       if (!response.ok) throw new Error(`Failed to fetch lead segments: ${response.statusText}`);
       const data = await response.json();
       setSegments(data.segments || []);
+      setFollowUpUpcoming(data.follow_up_upcoming ?? 0);
+      setFollowUpNextDue(data.follow_up_next_due ?? null);
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('[useLeadSegmentCounts]', err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [vertical]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -40,10 +48,10 @@ export function useLeadSegmentCounts(enabled = true) {
     return () => abortControllerRef.current?.abort();
   }, [enabled, fetchSegments]);
 
-  return { segments, isLoading, refresh: fetchSegments };
+  return { segments, followUpUpcoming, followUpNextDue, isLoading, refresh: fetchSegments };
 }
 
-export function useCampaigns() {
+export function useCampaigns(vertical: VerticalFilter = 'all') {
   const [campaigns, setCampaigns] = useState<CampaignRun[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +69,7 @@ export function useCampaigns() {
     setError(null);
 
     try {
-      const response = await fetch('/api/campaigns', {
+      const response = await fetch(`/api/campaigns?vertical=${vertical}`, {
         signal: abortController.signal,
       });
 
@@ -78,7 +86,7 @@ export function useCampaigns() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [vertical]);
 
   useEffect(() => {
     fetchCampaigns();
@@ -96,7 +104,7 @@ export function useCampaigns() {
   return { campaigns, isLoading, error, refresh: fetchCampaigns };
 }
 
-export function useCampaignStats() {
+export function useCampaignStats(vertical: VerticalFilter = 'all') {
   const [stats, setStats] = useState<CampaignStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +122,7 @@ export function useCampaignStats() {
     setError(null);
 
     try {
-      const response = await fetch('/api/campaigns/stats', {
+      const response = await fetch(`/api/campaigns/stats?vertical=${vertical}`, {
         signal: abortController.signal,
       });
 
@@ -131,7 +139,7 @@ export function useCampaignStats() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [vertical]);
 
   useEffect(() => {
     fetchStats();

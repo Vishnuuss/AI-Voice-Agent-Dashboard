@@ -58,3 +58,56 @@ export function verticalLabel(value: unknown): string {
   const v = parseVertical(value);
   return v ? VERTICAL_LABELS[v] : VERTICAL_LABELS[DEFAULT_VERTICAL];
 }
+
+/**
+ * The dashboard's header switch sends `?vertical=` on every list request, with
+ * "all" meaning no filter. Returns null for "all", for a missing value and for
+ * anything unrecognised - so a bad query string shows everything rather than
+ * silently showing one business line's leads under another's heading.
+ *
+ * Deliberately different from parseVertical: this one is for query strings,
+ * where "all" is a legitimate answer.
+ */
+export function verticalFromParam(value: unknown): Vertical | null {
+  const s = String(value ?? '').trim().toLowerCase();
+  if (!s || s === 'all') return null;
+  return parseVertical(s);
+}
+
+/**
+ * Applies the header switch to any `leads` query. Null means "All", which is
+ * no filter at all - not a four-way `in`, so leads written before the column
+ * existed still appear.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyVerticalFilter(query: any, vertical: Vertical | null) {
+  return vertical ? query.eq('vertical', vertical) : query;
+}
+
+/**
+ * Guards a lead that was matched to a call BY PHONE NUMBER rather than by id.
+ *
+ * `leads.phone` used to be globally unique, so a phone lookup could only ever
+ * return the one right lead. Once the same person can be a lead in several
+ * business lines, that lookup becomes ambiguous, and attaching a solar call's
+ * score, recording and transcript to the same person's loan lead is silent
+ * corruption of data the client reads and bills from.
+ *
+ * Returns true when the match should be REJECTED. Deliberately conservative:
+ * it only rejects when both sides are actually known to differ.
+ *
+ * - `leadVertical` undefined -> the column does not exist yet (pre-migration) or
+ *   was not selected. No opinion, allow. This is what lets the fix ship BEFORE
+ *   the migration without changing today's behaviour.
+ * - `expectedVertical` unknown -> the agent did not say which business line it
+ *   was calling for (every agent today). No opinion, allow.
+ *
+ * So this is inert until there is real vertical data on both sides, and from
+ * then on it blocks exactly the cross-business-line mismatches.
+ */
+export function isWrongVerticalMatch(leadVertical: unknown, expectedVertical: unknown): boolean {
+  const lead = parseVertical(leadVertical);
+  const expected = parseVertical(expectedVertical);
+  if (!lead || !expected) return false;
+  return lead !== expected;
+}

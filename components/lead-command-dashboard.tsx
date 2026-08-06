@@ -1,10 +1,18 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useLeads, useLeadStats, useLead, updateLead, type LeadQuery } from '@/hooks/use-leads'
+import { useLeads, useLeadStats, useLead, updateLead, type LeadQuery, type VerticalFilter } from '@/hooks/use-leads'
 import { useCampaigns, useLeadSegmentCounts, launchCampaign, pauseCampaign, resumeCampaign } from '@/hooks/use-campaigns'
 import type { LeadSegment } from '@/lib/lead-segments'
-import { DEFAULT_VERTICAL, VERTICAL_LABELS, VERTICAL_STYLES, parseVertical, type Vertical } from '@/lib/verticals'
+import {
+  DEFAULT_VERTICAL,
+  VERTICALS,
+  VERTICAL_LABELS,
+  VERTICAL_STYLES,
+  parseVertical,
+  type Vertical,
+} from '@/lib/verticals'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCalls, useCallStats, useTranscript } from '@/hooks/use-calls'
 import { useSettings } from '@/hooks/use-settings'
 import { useHealth, useOverview, useQuality, useSources, useWeekly } from '@/hooks/use-reports'
@@ -247,12 +255,15 @@ function StatFigure({
 }
 
 /**
- * A lead's business line. The agent sends it on every call and it is persisted in
- * qual_data.vertical, so no database column is needed. Falls back to loan, which
- * is the only vertical with a built agent today.
+ * A lead's business line, from the `vertical` column set at upload time.
+ *
+ * The qual_data fallback is kept deliberately: it is where this used to be read
+ * from, and leads created before the column existed still carry it there. Every
+ * lead gets a real column value from the migration onward, so this fallback only
+ * ever matters for history.
  */
 function verticalOf(lead: any): Vertical {
-  return parseVertical(lead?.qual_data?.vertical) ?? DEFAULT_VERTICAL
+  return parseVertical(lead?.vertical) ?? parseVertical(lead?.qual_data?.vertical) ?? DEFAULT_VERTICAL
 }
 
 function verticalLabelOf(lead: any) {
@@ -888,20 +899,22 @@ function LeadsPage({
 function CallsPage({
   onSelectLead,
   callStats,
+  vertical,
 }: {
   onSelectLead: (lead: any, callId?: string | null) => void
   callStats: any
+  vertical: VerticalFilter
 }) {
   const [callFilter, setCallFilter] = useState("all")
   const [page, setPage] = useState(1)
   // Filtering happens server-side on outcome. The old tabs filtered on a
   // `direction` field that no call row has ever carried, so every tab but "All"
   // rendered an empty table.
-  const { calls, totalCount, totalPages, isLoading, refresh } = useCalls(callFilter, page)
+  const { calls, totalCount, totalPages, isLoading, refresh } = useCalls(callFilter, page, "", vertical)
 
   useEffect(() => {
     setPage(1)
-  }, [callFilter])
+  }, [callFilter, vertical])
 
   return (
     <>
@@ -1257,6 +1270,19 @@ function CampaignsPage({
                       <div>
                         <div className="flex items-center gap-2">
                           <p className="font-semibold">{name}</p>
+                          {/* Shown even when the header switch is on a single
+                              business line: on "All" the list is mixed, and a
+                              campaign name alone rarely says which one it was. */}
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "border-transparent",
+                              VERTICAL_STYLES[verticalOf(campaign)].color,
+                              VERTICAL_STYLES[verticalOf(campaign)].bg,
+                            )}
+                          >
+                            {VERTICAL_LABELS[verticalOf(campaign)]}
+                          </Badge>
                           <CampaignStatusBadge status={status} />
                         </div>
                         <p className="text-sm text-muted-foreground">
@@ -1510,7 +1536,13 @@ function CampaignsPage({
   )
 }
 
-function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any, callId?: string | null) => void }) {
+function FollowUpsPage({
+  onSelectLead,
+  vertical,
+}: {
+  onSelectLead: (lead: any, callId?: string | null) => void
+  vertical: VerticalFilter
+}) {
   const [page, setPage] = useState(1)
   // Real data. This page used to filter a module-level array that was permanently
   // empty, so it showed "0 leads need follow-up" no matter what was in the database.
@@ -1520,8 +1552,9 @@ function FollowUpsPage({ onSelectLead }: { onSelectLead: (lead: any, callId?: st
     "",
     { followUp: true, sort: "follow_up_date", order: "asc" },
     page,
+    vertical,
   )
-  const { leads: retryLeads } = useLeads("", { status: "retry_pending" }, 1)
+  const { leads: retryLeads } = useLeads("", { status: "retry_pending" }, 1, vertical)
 
   const now = Date.now()
   const dayMs = 24 * 3600 * 1000
@@ -1674,14 +1707,16 @@ function ReportsPage({
   leadStats,
   callStats,
   onTopUp,
+  vertical,
 }: {
   leadStats: any
   callStats: any
   onTopUp: () => void
+  vertical: VerticalFilter
 }) {
-  const { data: sources, isLoading: sourcesLoading } = useSources()
-  const { data: weekly, isLoading: weeklyLoading } = useWeekly()
-  const { data: quality, isLoading: qualityLoading } = useQuality(30)
+  const { data: sources, isLoading: sourcesLoading } = useSources(vertical)
+  const { data: weekly, isLoading: weeklyLoading } = useWeekly(vertical)
+  const { data: quality, isLoading: qualityLoading } = useQuality(30, vertical)
   const [exporting, setExporting] = useState(false)
   // Performance and billing answer different questions, so they get their own
   // views rather than one endlessly scrolling page. Segmented control rather
@@ -1719,7 +1754,10 @@ function ReportsPage({
   const downloadLeadExport = async () => {
     setExporting(true)
     try {
-      const res = await fetch("/api/reports/export")
+      // Exports what is on screen, not everything - a "Solar" report that
+      // downloads all four business lines is a quiet way to hand the client
+      // the wrong list.
+      const res = await fetch(`/api/reports/export?vertical=${vertical}`)
       if (res.status === 404) {
         toast.info("There are no leads to export yet.")
         return
@@ -2115,7 +2153,18 @@ const PROMPT_BLOCKS: { key: "global" | "start" | "agenda" | "end"; label: string
   { key: "end", label: "Closing line", hint: "The last thing the agent says before hanging up." },
 ]
 
-function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any }) {
+function AIAgentPage({
+  leadStats,
+  callStats,
+  vertical,
+}: {
+  leadStats: any
+  callStats: any
+  vertical: VerticalFilter
+}) {
+  // Which agent's script this page edits. "All" is not a thing that can have a
+  // script, so it resolves to Loan - the same default the API uses.
+  const promptVertical: Vertical = vertical === "all" ? DEFAULT_VERTICAL : vertical
   const { settings, updateSetting, isLoading } = useSettings()
   const [form, setForm] = useState({
     language: "Telugu",
@@ -2145,6 +2194,7 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
   // Previously "Opening greeting" saved to our own settings table and never
   // touched the live agent at all - the button worked, it just didn't do what
   // it looked like it did. This reads and writes the actual Dograh workflow.
+  const [agents, setAgents] = useState<any[]>([])
   const [prompts, setPrompts] = useState<Record<string, string>>({})
   const [promptVersion, setPromptVersion] = useState<number | null>(null)
   const [promptsLoading, setPromptsLoading] = useState(false)
@@ -2155,7 +2205,7 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
     setPromptsLoading(true)
     setPromptsError(null)
     try {
-      const res = await fetch("/api/agent/prompts")
+      const res = await fetch(`/api/agent/prompts?vertical=${promptVertical}`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to load agent prompts (${res.status})`)
       setPrompts(data.prompts || {})
@@ -2165,16 +2215,34 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
     } finally {
       setPromptsLoading(false)
     }
-  }, [])
+  }, [promptVertical])
 
   useEffect(() => {
     loadPrompts()
   }, [loadPrompts])
 
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/agent/agents")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setAgents(d.agents ?? [])
+      })
+      .catch(() => {
+        /* the card falls back to "Checking agents…"; a failed probe is not
+           worth a toast on a page the user came to for something else */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const savePrompt = async (key: string) => {
     setSavingPrompt(key)
     try {
-      const res = await fetch("/api/agent/prompts", {
+      // Same business line the prompts were LOADED with. Saving to a different
+      // agent than the one on screen would rewrite what a live agent says.
+      const res = await fetch(`/api/agent/prompts?vertical=${promptVertical}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [key]: prompts[key] }),
@@ -2216,6 +2284,59 @@ function AIAgentPage({ leadStats, callStats }: { leadStats: any; callStats: any 
           team&apos;s reference and used by the retry rules.
         </p>
       </section>
+
+      {/* Which business lines actually have an agent. Without this the only way
+          to discover that Solar has no agent was to try launching a campaign
+          and have it refused. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Agents by business line</CardTitle>
+          <CardDescription>
+            A campaign can only run for a business line that has an agent. The others are refused rather than
+            called by the wrong script.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-2">
+          {agents.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Checking agents…</p>
+          ) : (
+            agents.map((agent) => (
+              <div
+                key={agent.vertical}
+                className="flex items-start justify-between gap-3 rounded-lg border border-border/70 p-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "border-transparent",
+                        VERTICAL_STYLES[agent.vertical as Vertical]?.color,
+                        VERTICAL_STYLES[agent.vertical as Vertical]?.bg,
+                      )}
+                    >
+                      {agent.label}
+                    </Badge>
+                    {agent.reachable ? (
+                      <span className="text-xs font-medium text-emerald-500">Ready</span>
+                    ) : agent.configured ? (
+                      <span className="text-xs font-medium text-destructive">Not responding</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not built yet</span>
+                    )}
+                  </div>
+                  <p className="mt-1 truncate text-xs text-muted-foreground">
+                    {agent.name ?? agent.detail}
+                  </p>
+                </div>
+                {agent.workflow_id != null && (
+                  <span className="shrink-0 text-xs text-muted-foreground">#{agent.workflow_id}</span>
+                )}
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -3064,6 +3185,68 @@ const systemNavItems = [
   { label: "Settings", icon: Settings },
 ] as const
 
+/** Where the chosen business line is remembered between visits. */
+const VERTICAL_STORAGE_KEY = "bswealth.vertical"
+
+/**
+ * The business-line switch that scopes the whole dashboard.
+ *
+ * One control rather than a filter on each page: the counts in the sidebar, the
+ * rows in the table, the campaigns list and the reports all have to agree about
+ * which business line is on screen, and four independent dropdowns would
+ * eventually disagree. Selecting "Solar" here means every number below it is a
+ * solar number.
+ *
+ * Horizontally scrollable rather than wrapping, so a phone shows a single row
+ * that can be swiped instead of a block that pushes the page down.
+ */
+function VerticalSwitch({
+  value,
+  onChange,
+}: {
+  value: VerticalFilter
+  onChange: (next: VerticalFilter) => void
+}) {
+  const options: { value: VerticalFilter; label: string }[] = [
+    { value: "all", label: "All" },
+    ...VERTICALS.map((v) => ({ value: v as VerticalFilter, label: VERTICAL_LABELS[v] })),
+  ]
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Business line"
+      className="flex items-center gap-1 overflow-x-auto rounded-full border border-border/70 bg-muted/40 p-1"
+    >
+      {options.map((option) => {
+        const active = value === option.value
+        // "All" has no colour of its own; the four business lines keep the same
+        // colours they carry on the lead badges, so the switch and the rows
+        // below it are visibly the same language.
+        const style = option.value === "all" ? null : VERTICAL_STYLES[option.value as Vertical]
+        return (
+          <button
+            key={option.value}
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors",
+              active
+                ? style
+                  ? `${style.bg} ${style.color}`
+                  : "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function LeadCommandDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -3080,6 +3263,28 @@ export function LeadCommandDashboard() {
   const [isUploading, setIsUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [leadPage, setLeadPage] = useState(1)
+
+  // The business line the whole dashboard is scoped to. Starts at "all" on the
+  // server and on first paint, then restores the remembered choice - reading
+  // localStorage during the initial render would not match the server-rendered
+  // HTML and would hydrate mismatched.
+  const [vertical, setVertical] = useState<VerticalFilter>("all")
+  const [uploadVertical, setUploadVertical] = useState<Vertical>(DEFAULT_VERTICAL)
+  const [uploadOpen, setUploadOpen] = useState(false)
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(VERTICAL_STORAGE_KEY)
+    if (saved === "all" || (saved && parseVertical(saved))) setVertical(saved as VerticalFilter)
+  }, [])
+
+  const changeVertical = useCallback((next: VerticalFilter) => {
+    setVertical(next)
+    window.localStorage.setItem(VERTICAL_STORAGE_KEY, next)
+    // Any page position or filter belongs to the business line that was on
+    // screen a moment ago, so reset rather than carry them across.
+    setLeadPage(1)
+    setStatusFilter("All")
+  }, [])
 
   // Debounced so typing in the search box does not fire a request per keystroke.
   useEffect(() => {
@@ -3102,17 +3307,35 @@ export function LeadCommandDashboard() {
     totalPages,
     isLoading: leadsLoading,
     refresh: refreshLeads,
-  } = useLeads(debouncedQuery, leadFilter, leadPage)
-  const { stats: leadStats, refresh: refreshStats } = useLeadStats()
-  const { campaigns: dbCampaigns, isLoading: campaignsLoading, refresh: refreshCampaigns } = useCampaigns()
-  const { stats: callStats, refresh: refreshCallStats } = useCallStats()
-  const { data: chartData } = useOverview(range === "24h" ? 1 : range === "30d" ? 30 : 7)
+  } = useLeads(debouncedQuery, leadFilter, leadPage, vertical)
+  const { stats: leadStats, refresh: refreshStats } = useLeadStats(vertical)
+  const { campaigns: dbCampaigns, isLoading: campaignsLoading, refresh: refreshCampaigns } = useCampaigns(vertical)
+  const { stats: callStats, refresh: refreshCallStats } = useCallStats(vertical)
+  const { data: chartData } = useOverview(range === "24h" ? 1 : range === "30d" ? 30 : 7, vertical)
   const { data: health } = useHealth()
 
   const [newCampaignName, setNewCampaignName] = useState("")
   const [newCampaignLeadCount, setNewCampaignLeadCount] = useState("100")
   const [newCampaignSegment, setNewCampaignSegment] = useState<LeadSegment>("new")
-  const { segments: leadSegments, refresh: refreshLeadSegments } = useLeadSegmentCounts(campaignOpen)
+  // A campaign always targets exactly ONE business line - "All" is a valid way
+  // to look at leads but not a valid thing to dial, because each business line
+  // has its own agent and its own script. Seeded from the header switch, and
+  // falls back to Loan when the header is on "All".
+  const [campaignVertical, setCampaignVertical] = useState<Vertical>(DEFAULT_VERTICAL)
+
+  useEffect(() => {
+    if (vertical !== "all") setCampaignVertical(vertical)
+    setUploadVertical(vertical === "all" ? DEFAULT_VERTICAL : vertical)
+  }, [vertical])
+
+  // Counted for the same business line the launch will target, so the dialog
+  // cannot offer leads the campaign would not actually claim.
+  const {
+    segments: leadSegments,
+    followUpUpcoming,
+    followUpNextDue,
+    refresh: refreshLeadSegments,
+  } = useLeadSegmentCounts(campaignOpen, campaignVertical)
   const [isLaunching, setIsLaunching] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   // Defaults mirror what the launch route falls back to when these are
@@ -3200,15 +3423,27 @@ export function LeadCommandDashboard() {
     const formData = new FormData()
     formData.append("file", file)
     try {
-      const res = await fetch("/api/leads/upload", { method: "POST", body: formData })
+      // The business line rides in the URL, not the form body: on a multipart
+      // upload n8n moves the file into binary and leaves the parsed body empty,
+      // so a form field could not be relied on to arrive. Never inferred from
+      // the filename - a mis-tagged file means the wrong agent calls a real
+      // customer, which is far worse than a rejected upload.
+      const res = await fetch(`/api/leads/upload?vertical=${uploadVertical}`, {
+        method: "POST",
+        body: formData,
+      })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`)
 
       const summary = data.summary
+      // The business line is named back to the operator on purpose: it is the
+      // one thing about an upload that cannot be corrected by looking at the
+      // data afterwards, so it is worth confirming out loud.
+      const into = `into ${VERTICAL_LABELS[uploadVertical]}`
       toast.success(
         summary
-          ? `Uploaded: ${summary.valid ?? 0} leads added, ${summary.duplicate ?? 0} duplicates, ${summary.rejected ?? 0} rejected`
-          : "File uploaded",
+          ? `Uploaded ${into}: ${summary.valid ?? 0} leads added, ${summary.duplicate ?? 0} duplicates, ${summary.rejected ?? 0} rejected`
+          : `File uploaded ${into}`,
       )
       // The browser used to ALSO post the same file straight to a hard-coded n8n
       // cloud URL, which imported every row a second time and sent lead data to a
@@ -3259,6 +3494,7 @@ export function LeadCommandDashboard() {
         campaign_name: newCampaignName.trim(),
         lead_count: Math.min(requested, available),
         lead_segment: newCampaignSegment,
+        vertical: campaignVertical,
         concurrency,
         retry_config: {
           enabled: true,
@@ -3362,7 +3598,7 @@ export function LeadCommandDashboard() {
           />
         )
       case "Calls":
-        return <CallsPage onSelectLead={selectLead} callStats={callStats} />
+        return <CallsPage onSelectLead={selectLead} callStats={callStats} vertical={vertical} />
       case "Campaigns":
         return (
           <CampaignsPage
@@ -3373,11 +3609,18 @@ export function LeadCommandDashboard() {
           />
         )
       case "Follow-ups":
-        return <FollowUpsPage onSelectLead={selectLead} />
+        return <FollowUpsPage onSelectLead={selectLead} vertical={vertical} />
       case "Reports":
-        return <ReportsPage leadStats={leadStats} callStats={callStats} onTopUp={() => setTopUpOpen(true)} />
+        return (
+          <ReportsPage
+            leadStats={leadStats}
+            callStats={callStats}
+            onTopUp={() => setTopUpOpen(true)}
+            vertical={vertical}
+          />
+        )
       case "AI agent":
-        return <AIAgentPage leadStats={leadStats} callStats={callStats} />
+        return <AIAgentPage leadStats={leadStats} callStats={callStats} vertical={vertical} />
       case "Settings":
         return <SettingsPage health={health} onLogout={handleLogout} />
       default:
@@ -3549,7 +3792,10 @@ export function LeadCommandDashboard() {
                 what the other buttons cost, so it reads before them. */}
             <CreditsPill onTopUp={() => setTopUpOpen(true)} />
             <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} />
-            <Button variant="outline" size="sm" disabled={isUploading} onClick={() => fileInputRef.current?.click()} className="px-2.5 sm:px-3">
+            {/* Opens the business-line choice first rather than the file picker:
+                which business a list belongs to cannot be recovered from the file
+                itself, so it has to be stated before the rows are imported. */}
+            <Button variant="outline" size="sm" disabled={isUploading} onClick={() => setUploadOpen(true)} className="px-2.5 sm:px-3">
               <Upload data-icon="inline-start" />
               <span className="hidden sm:inline">{isUploading ? "Uploading…" : "Import leads"}</span>
             </Button>
@@ -3574,8 +3820,16 @@ export function LeadCommandDashboard() {
           </div>
         </header>
 
+        {/* Its own bar under the header rather than squeezed into the button
+            cluster: it governs everything on the page below it, so it reads as
+            a scope for the content, not as one more action. */}
+        <div className="sticky top-20 z-20 flex items-center gap-3 border-b border-border/70 bg-background/80 px-3 py-2 backdrop-blur-xl md:px-6">
+          <span className="hidden shrink-0 text-xs font-medium text-muted-foreground sm:inline">Business line</span>
+          <VerticalSwitch value={vertical} onChange={changeVertical} />
+        </div>
+
         <div
-          key={activeNav}
+          key={`${activeNav}-${vertical}`}
           className="motion-rise mx-auto flex max-w-screen-2xl flex-col gap-6 p-4 pb-24 md:p-8 lg:pb-10"
         >
           {renderPage()}
@@ -3683,6 +3937,60 @@ export function LeadCommandDashboard() {
           and any "out of credits" toast, so it lives at the shell level. */}
       <TopUpDialog open={topUpOpen} onOpenChange={setTopUpOpen} />
 
+      {/* Import leads — business line first, file second. */}
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Import leads</DialogTitle>
+            <DialogDescription>
+              Choose which business these leads belong to. They will only ever be called by that
+              business&rsquo;s agent.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="grid gap-5">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="upload-vertical">
+                Business line
+              </label>
+              <Select value={uploadVertical} onValueChange={(v) => setUploadVertical(v as Vertical)}>
+                <SelectTrigger id="upload-vertical">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VERTICALS.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {VERTICAL_LABELS[v]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                This cannot be worked out from the file, so it has to be chosen here. Picking the
+                wrong one means these people are called by the wrong agent.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
+              CSV, XLSX or XLS. Any column layout — the importer matches common headings for name,
+              phone, email and city, and rejects rows with no usable phone number.
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUploadOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={isUploading}
+              onClick={() => {
+                setUploadOpen(false)
+                fileInputRef.current?.click()
+              }}
+            >
+              Choose file →
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Start Campaign Dialog */}
       <Dialog open={campaignOpen} onOpenChange={setCampaignOpen}>
         <DialogContent>
@@ -3691,6 +3999,32 @@ export function LeadCommandDashboard() {
             <DialogDescription>Configure your AI agent to start calling leads.</DialogDescription>
           </DialogHeader>
           <DialogBody className="grid gap-5">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium" htmlFor="campaign-vertical">
+                Business line
+              </label>
+              {/* First field in the dialog because it decides both which leads
+                  are eligible and which agent does the talking. A campaign can
+                  only ever target one business line - "All" is a way to view
+                  leads, not a thing that can be dialled. */}
+              <Select value={campaignVertical} onValueChange={(v) => setCampaignVertical(v as Vertical)}>
+                <SelectTrigger id="campaign-vertical">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VERTICALS.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {VERTICAL_LABELS[v]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Only {VERTICAL_LABELS[campaignVertical]} leads will be called, by the{" "}
+                {VERTICAL_LABELS[campaignVertical]} agent.
+              </p>
+            </div>
+
             <div className="grid gap-2">
               <label className="text-sm font-medium" htmlFor="campaign-segment">
                 Who to call
@@ -3717,6 +4051,18 @@ export function LeadCommandDashboard() {
               <p className="text-xs text-muted-foreground">
                 {leadSegments.find((s) => s.value === newCampaignSegment)?.description ?? ""}
               </p>
+              {/* A callback scheduled for next week is not "due" today, so this
+                  segment is correctly 0 - but a bare 0 next to a sidebar badge
+                  showing 1 looks broken. Say where the difference went. */}
+              {newCampaignSegment === "follow_up" &&
+                (leadSegments.find((s) => s.value === "follow_up")?.count ?? 0) === 0 &&
+                followUpUpcoming > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {followUpUpcoming} follow-up{followUpUpcoming === 1 ? " is" : "s are"} scheduled for later
+                    {followUpNextDue ? ` — the next one on ${formatDate(followUpNextDue)}` : ""}. They become
+                    callable on the day the customer asked for.
+                  </p>
+                )}
             </div>
 
             <div className="rounded-lg border bg-muted/30 p-3">

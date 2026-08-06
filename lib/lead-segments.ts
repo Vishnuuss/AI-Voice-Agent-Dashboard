@@ -11,6 +11,8 @@
  * a call captures a callback date, regardless of how the lead's status ends up.
  */
 
+import { applyVerticalFilter, type Vertical } from '@/lib/verticals';
+
 export type LeadSegment = 'new' | 'retry_pending' | 'follow_up' | 'unreachable';
 
 export const LEAD_SEGMENTS: { value: LeadSegment; label: string; description: string }[] = [
@@ -35,9 +37,21 @@ export function isValidLeadSegment(value: unknown): value is LeadSegment {
  * `retryGapMinutes` (the AI Agent page's "Gap between retries" setting) holds
  * a retry_pending lead back from being re-selected until that many minutes
  * have passed since its last attempt - callers that don't pass it get no gap.
+ *
+ * `vertical` restricts the query to one business line. It is applied HERE, in
+ * the shared function, rather than at the two call sites - if the launch route
+ * and the segment-count route each applied it themselves they would eventually
+ * drift, and the dialog would promise a number the launch could not deliver.
+ * Null/undefined means "All", which is no filter at all.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function applyLeadSegmentFilter(query: any, segment: LeadSegment, retryGapMinutes = 0) {
+export function applyLeadSegmentFilter(
+  query: any,
+  segment: LeadSegment,
+  retryGapMinutes = 0,
+  vertical?: Vertical | null,
+) {
+  query = applyVerticalFilter(query, vertical ?? null);
   switch (segment) {
     case 'retry_pending': {
       let q = query.eq('status', 'retry_pending');
