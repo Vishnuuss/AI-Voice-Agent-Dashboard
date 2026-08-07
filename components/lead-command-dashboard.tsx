@@ -64,6 +64,7 @@ import {
   Volume2,
   X,
   Zap,
+  Wallet,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts"
@@ -1788,49 +1789,36 @@ function ReportsPage({
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <p className="motion-fade text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                {tab === "performance" ? "Performance" : "Usage & billing"}
+                Performance
               </p>
               <h1 className="motion-rise mt-3 text-balance font-display text-4xl font-semibold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
                 Reports
                 <span className="text-muted-foreground"> &amp; analytics</span>
               </h1>
               <p className="motion-rise mt-4 max-w-[52ch] text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
-                {tab === "performance"
-                  ? "Where your leads come from, how the agent performs on the phone, and what it gets wrong."
-                  : "What your calling is costing, how fast credits are going down, and every charge in detail."}
+                Where your leads come from, how the agent performs on the phone, and what it gets wrong.
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <Tabs value={tab} onValueChange={setTab}>
-                <TabsList>
-                  <TabsTrigger value="performance">Performance</TabsTrigger>
-                  <TabsTrigger value="billing">Usage &amp; billing</TabsTrigger>
-                </TabsList>
-              </Tabs>
-              {tab === "performance" ? (
-                <Button
-                  variant="outline"
-                  onClick={downloadLeadExport}
-                  disabled={exporting}
-                  className="motion-fade"
-                >
-                  <Download data-icon="inline-start" />
-                  {exporting ? "Preparing…" : "Export all leads"}
-                </Button>
-              ) : (
-                <Button onClick={onTopUp} className="motion-fade">
-                  <CircleDollarSign data-icon="inline-start" />
-                  Add credits
-                </Button>
-              )}
+              {/* Billing moved out to its own sidebar destination, so there is
+                  exactly one place to read charges rather than two that could
+                  disagree. This page is purely performance now. */}
+              <Button
+                variant="outline"
+                onClick={downloadLeadExport}
+                disabled={exporting}
+                className="motion-fade"
+              >
+                <Download data-icon="inline-start" />
+                {exporting ? "Preparing…" : "Export all leads"}
+              </Button>
             </div>
           </div>
 
           {/* Headline rates, divided rather than boxed — cards here would add
               four more containers to a page that is already all containers. */}
           <dl className="stagger mt-10 grid grid-cols-2 gap-x-6 gap-y-8 border-t border-border/60 pt-8 lg:grid-cols-4 lg:divide-x lg:divide-border/60">
-            {(tab === "performance"
-              ? [
+            {([
                   {
                     label: "Qualification rate",
                     value: `${qualificationRate}%`,
@@ -1852,34 +1840,6 @@ function ReportsPage({
                     sub: bestSource ? `${bestSource.count.toLocaleString()} leads` : "No leads yet",
                   },
                 ]
-              : [
-                  {
-                    label: "Credits left",
-                    value: credits
-                      ? credits.balance_credits.toLocaleString("en-IN", { maximumFractionDigits: 0 })
-                      : "—",
-                    sub: credits
-                      ? `about ${credits.runway.minutes.toLocaleString("en-IN")} minutes of calling`
-                      : "Loading",
-                  },
-                  {
-                    label: "Used last 7 days",
-                    value: credits ? credits.burn.last_7d_credits.toLocaleString("en-IN") : "—",
-                    sub: credits ? `${credits.burn.calls_7d.toLocaleString("en-IN")} calls charged` : "Loading",
-                  },
-                  {
-                    label: "Avg. per call",
-                    value: credits ? credits.burn.avg_credits_per_call.toFixed(2) : "—",
-                    sub: credits ? `at ${credits.rate.credits_per_minute} credits a minute` : "Loading",
-                  },
-                  {
-                    // total_talk_time has been computed by /api/calls/stats all
-                    // along with nothing reading it. It earns its keep here.
-                    label: "Total talk time",
-                    value: formatDuration(callStats?.total_talk_time),
-                    sub: "Across all connected calls",
-                  },
-                ]
             ).map((kpi, i) => (
               <div key={kpi.label} className={cn("min-w-0", i > 0 && "lg:pl-6")}>
                 <dt className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -1895,9 +1855,6 @@ function ReportsPage({
         </div>
       </section>
 
-      {tab === "billing" ? (
-        <UsageBillingPanel onTopUp={onTopUp} />
-      ) : (
       <>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -2141,7 +2098,6 @@ function ReportsPage({
         </Card>
       </div>
       </>
-      )}
     </>
   )
 }
@@ -3184,6 +3140,36 @@ function LeadDetailSheet({
   )
 }
 
+/**
+ * Usage & billing as a destination of its own.
+ *
+ * Previously a tab inside Reports, which put the client's balance behind two
+ * clicks and a heading that said "Reports & analytics" - the wrong frame for
+ * "how much money is left".
+ */
+function UsageBillingPage({ onTopUp }: { onTopUp: () => void }) {
+  return (
+    <>
+      <section className="ambient-wash relative -mx-4 -mt-4 overflow-hidden border-b border-border/60 px-4 pb-8 pt-10 md:-mx-8 md:-mt-8 md:px-8 md:pb-10 md:pt-14">
+        <div className="relative z-10">
+          <p className="motion-fade text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            Usage &amp; billing
+          </p>
+          <h1 className="motion-rise mt-3 text-balance font-display text-4xl font-semibold leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
+            Credits
+            <span className="text-muted-foreground"> &amp; charges</span>
+          </h1>
+          <p className="motion-rise mt-4 max-w-[52ch] text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
+            What is left, what has been added, and what every call has cost — with a statement you
+            can check line by line.
+          </p>
+        </div>
+      </section>
+      <UsageBillingPanel onTopUp={onTopUp} />
+    </>
+  )
+}
+
 // ─── MAIN DASHBOARD COMPONENT ──────────────────────────
 
 const navItems = [
@@ -3197,6 +3183,11 @@ const navItems = [
 
 const systemNavItems = [
   { label: "AI agent", icon: Bot },
+  // Its own destination rather than a tab inside Reports. Money is not a
+  // sub-view of analytics - the client opens the dashboard specifically to
+  // check the balance, and hiding that two clicks deep behind "Reports"
+  // made it the hardest number on the site to find.
+  { label: "Usage & billing", icon: Wallet },
   { label: "Settings", icon: Settings },
 ] as const
 
@@ -3636,6 +3627,8 @@ export function LeadCommandDashboard() {
         )
       case "AI agent":
         return <AIAgentPage leadStats={leadStats} callStats={callStats} vertical={vertical} />
+      case "Usage & billing":
+        return <UsageBillingPage onTopUp={() => setTopUpOpen(true)} />
       case "Settings":
         return <SettingsPage health={health} onLogout={handleLogout} />
       default:

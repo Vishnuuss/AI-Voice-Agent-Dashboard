@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { toCredits } from '@/lib/billing';
+import { billingPeriodStart } from '@/lib/billing-period';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,11 +47,18 @@ export async function GET(request: Request) {
         { count: 'exact' },
       )
       .eq('account_id', 'default')
+      // The client's statement starts when their billing period opened. Anything
+      // older is our build-and-test traffic and was never their charge. The rows
+      // are still in the ledger - this hides them, it does not delete them, so
+      // the hash chain and the integrity check are untouched.
+      .gte('created_at', billingPeriodStart())
       .order('created_at', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
     if (type) query = query.eq('entry_type', type);
-    if (from) query = query.gte('created_at', from);
+    // A caller-supplied `from` can narrow the window but never widen it past the
+    // period start.
+    if (from && from > billingPeriodStart()) query = query.gte('created_at', from);
     if (to) query = query.lte('created_at', to);
 
     const { data, error, count } = await query;
@@ -78,6 +86,7 @@ export async function GET(request: Request) {
     const total = count ?? 0;
     return NextResponse.json({
       entries,
+      period_start: billingPeriodStart(),
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
     });
   } catch (err: any) {

@@ -13,12 +13,17 @@
 
 import { applyVerticalFilter, type Vertical } from '@/lib/verticals';
 
-export type LeadSegment = 'new' | 'retry_pending' | 'follow_up' | 'unreachable';
+export type LeadSegment = 'new' | 'retry_pending' | 'follow_up' | 'follow_up_scheduled' | 'unreachable';
 
 export const LEAD_SEGMENTS: { value: LeadSegment; label: string; description: string }[] = [
   { value: 'new', label: 'New', description: 'Never called yet' },
   { value: 'retry_pending', label: 'Retry pending', description: 'No answer last time — due for another try' },
-  { value: 'follow_up', label: 'Follow-ups due', description: 'Asked for a callback on a date that has arrived' },
+  { value: 'follow_up', label: 'Follow-ups due now', description: 'Asked for a callback on a date that has arrived' },
+  {
+    value: 'follow_up_scheduled',
+    label: 'Follow-ups — all scheduled',
+    description: 'Every booked callback, including ones due on a later date',
+  },
   { value: 'unreachable', label: 'Unreachable', description: 'Gave up after repeated no-answers — manual retry only' },
 ];
 
@@ -65,6 +70,18 @@ export function applyLeadSegmentFilter(
     }
     case 'follow_up':
       return query.not('follow_up_date', 'is', null).lte('follow_up_date', new Date().toISOString()).neq('status', 'queued');
+    /**
+     * Every booked callback, whether or not its date has arrived.
+     *
+     * `follow_up` deliberately only offers callbacks that are DUE, because
+     * ringing someone a week before the date they asked for is a good way to
+     * lose them. But a client who can see "1 follow-up" in the sidebar and finds
+     * "Follow-ups due now (0)" in the launch dialog concludes the product is
+     * broken - which happened twice before this existed. So the early call is
+     * offered explicitly, labelled, and chosen rather than stumbled into.
+     */
+    case 'follow_up_scheduled':
+      return query.not('follow_up_date', 'is', null).neq('status', 'queued');
     case 'unreachable':
       return query.in('status', ['no_answer', 'unreachable']);
     case 'new':

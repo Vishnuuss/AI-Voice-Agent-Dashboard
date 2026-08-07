@@ -54,8 +54,70 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
   const daily = usage?.daily ?? [];
   const peak = Math.max(1, ...daily.map((d) => d.credits));
 
+  const balance = credits?.balance_credits ?? 0;
+  const period = usage?.period;
+  const periodStart = usage?.period_start;
+
   return (
     <div className="stagger flex flex-col gap-6">
+      {/* ── The four numbers that answer "where do I stand" ───────────────── */}
+      {/* Deliberately first and deliberately plain. Before this, the page opened
+          with a burn chart, which shows a trend but never states the balance —
+          the one figure the client actually came to read. */}
+      <Card className="shadow-paper">
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="font-display">Where your credits stand</CardTitle>
+              <CardDescription>
+                {periodStart
+                  ? `Everything since your account went live on ${formatWhen(periodStart)}. Set-up and testing before that date is not counted.`
+                  : 'Your balance, what you have added, and what calling has cost.'}
+              </CardDescription>
+            </div>
+            <Button size="sm" onClick={onTopUp}>
+              Add credits
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div>
+              <div className="font-display text-3xl tabular-nums">
+                {balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </div>
+              <div className="text-xs text-muted-foreground">Credits left now</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                about {Math.floor(balance / Math.max(rate, 1)).toLocaleString('en-IN')} more minutes
+              </div>
+            </div>
+            <div>
+              <div className="font-display text-3xl tabular-nums">
+                {(period?.credits_added ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </div>
+              <div className="text-xs text-muted-foreground">Credits added</div>
+            </div>
+            <div>
+              <div className="font-display text-3xl tabular-nums">
+                {(period?.credits_spent ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </div>
+              <div className="text-xs text-muted-foreground">Credits used on calls</div>
+            </div>
+            <div>
+              <div className="font-display text-3xl tabular-nums">
+                {(period?.calls ?? 0).toLocaleString('en-IN')}
+              </div>
+              <div className="text-xs text-muted-foreground">Calls charged</div>
+            </div>
+          </div>
+          <p className="mt-4 border-t border-border/70 pt-3 text-xs text-muted-foreground">
+            Added minus used equals the balance. Only connected calls are charged — missed, busy
+            and failed calls cost nothing. Each charged call is billed in whole minutes at {rate}{' '}
+            credits a minute, so a call of 1 minute 5 seconds counts as 2 minutes.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* ── Burn ─────────────────────────────────────────────────────────── */}
       <Card className="shadow-paper">
         <CardHeader>
@@ -179,22 +241,15 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
             <div>
               <CardTitle className="font-display">Statement</CardTitle>
               <CardDescription>
-                Every credit added and every call charged, newest first.
+                Every credit added and every call charged, newest first. Each line shows the
+                balance straight after it, so any figure above can be traced to the calls behind
+                it.
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={onTopUp}>
-              Add credits
-            </Button>
           </div>
-          {/* Stated up front, on the page where charges are read. Whole-minute
-              billing is standard for telephony, but only defensible if the
-              client learns it here rather than by working it out from a
-              statement line. */}
-          <div className="mt-2 text-xs text-muted-foreground">
-            Calls are charged in whole minutes at {rate} credits a minute — a call of 1 minute
-            5 seconds counts as 2 minutes. Only connected calls are charged; missed, busy and
-            failed calls are free.
-          </div>
+          {/* The rate explanation and the Add credits button both moved to the
+              summary card at the top, which is where the client is looking when
+              they ask what a call costs. Repeating them here was noise. */}
         </CardHeader>
         <CardContent>
           {ledgerLoading && ledger.entries.length === 0 ? (

@@ -142,7 +142,7 @@ export async function POST(request: Request) {
     // request that omits it) behave exactly as before this was added.
     const rawSegment = body.lead_segment ?? 'new';
     if (!isValidLeadSegment(rawSegment)) {
-      return NextResponse.json({ error: `lead_segment must be one of: new, retry_pending, follow_up, unreachable` }, { status: 400 });
+      return NextResponse.json({ error: `lead_segment must be one of: new, retry_pending, follow_up, follow_up_scheduled, unreachable` }, { status: 400 });
     }
     const leadSegment = rawSegment as LeadSegment;
 
@@ -324,7 +324,7 @@ export async function POST(request: Request) {
 
     // Most-overdue first for follow-ups; oldest-first otherwise, same as before.
     query =
-      leadSegment === 'follow_up'
+      leadSegment === 'follow_up' || leadSegment === 'follow_up_scheduled'
         ? query.order('follow_up_date', { ascending: true })
         : query.order('created_at', { ascending: true });
 
@@ -348,7 +348,7 @@ export async function POST(request: Request) {
     const claimUpdate: Record<string, any> = { status: 'queued', campaign_run_id: campaignRunId };
     // The callback this lead was queued for is being acted on now; clear it so it
     // does not keep showing as "due" once this campaign has called them.
-    if (leadSegment === 'follow_up') claimUpdate.follow_up_date = null;
+    if (leadSegment === 'follow_up' || leadSegment === 'follow_up_scheduled') claimUpdate.follow_up_date = null;
 
     const { data: claimed, error: claimError } = await applyLeadSegmentFilter(
       supabase

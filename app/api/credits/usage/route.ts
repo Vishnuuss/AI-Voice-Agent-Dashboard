@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { toCredits } from '@/lib/billing';
+import { billingPeriodStart, usageWindowStart } from '@/lib/billing-period';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +28,9 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const days = Math.min(365, Math.max(1, Number(url.searchParams.get('days')) || 30));
-    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    // Clamped to the billing period start, so selecting 90 days cannot drag the
+    // pre-handover test traffic back into the client's chart.
+    const since = usageWindowStart(days);
 
     const billing = createBillingClient();
 
@@ -73,10 +76,15 @@ export async function GET(request: Request) {
     }
 
     // Fill gaps so the chart draws a continuous line rather than skipping
-    // quiet days, which would misleadingly flatten the burn curve.
+    // quiet days, which would misleadingly flatten the burn curve. Days before
+    // the billing period opened are omitted entirely rather than drawn as zero -
+    // a flat run of empty days in front of the real data reads as "we did
+    // nothing that week" instead of "we were not billing yet".
+    const firstDay = istDay(billingPeriodStart());
     const series: { date: string; credits: number; calls: number; billed_seconds: number }[] = [];
     for (let i = days - 1; i >= 0; i -= 1) {
       const date = istDay(new Date(Date.now() - i * 86_400_000).toISOString());
+      if (date < firstDay) continue;
       const v = daily.get(date);
       series.push({
         date,
@@ -96,9 +104,40 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => b.credits - a.credits);
 
+    // Whole-period totals, independent of the 7/30/90 day selector. The client
+    // asks "what have I spent since we went live", and answering that with a
+    // number that changes when they flick a chart tab is not an answer.
+    const periodRows: any[] = [];
+    for (let from = 0; from < MAX_ROWS; from += PAGE) {
+      const { data, error } = await billing
+        .from('credit_ledger')
+        .select('amount_milli_credits, entry_type')
+        .eq('account_id', 'default')
+        .gte('created_at', billingPeriodStart())
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) break;
+      periodRows.push(...data);
+      if (data.length < PAGE) break;
+    }
+
+    let periodAdded = 0, periodSpent = 0, periodCalls = 0;
+    for (const row of periodRows) {
+      const milli = Number(row.amount_milli_credits) || 0;
+      if (milli > 0) periodAdded += milli;
+      else periodSpent += Math.abs(milli);
+      if (row.entry_type === 'call_debit') periodCalls += 1;
+    }
+
     return NextResponse.json({
       range_days: days,
       timezone: 'Asia/Kolkata',
+      period_start: billingPeriodStart(),
+      period: {
+        credits_added: toCredits(periodAdded),
+        credits_spent: toCredits(periodSpent),
+        calls: periodCalls,
+      },
       daily: series,
       by_campaign: byCampaign,
       totals: {

@@ -74,6 +74,10 @@ export function useCreditLedger(page = 1, limit = 25) {
 export interface UsagePayload {
   range_days: number;
   timezone: string;
+  /** When the client's billing period opened — everything before is our testing. */
+  period_start: string;
+  /** Whole-period totals, independent of the 7/30/90 day chart selector. */
+  period: { credits_added: number; credits_spent: number; calls: number };
   daily: { date: string; credits: number; calls: number; billed_seconds: number }[];
   by_campaign: {
     campaign_id: number | null;
