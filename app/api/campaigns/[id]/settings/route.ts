@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { DograhApiError, DograhClient, DograhConfigError, dograh } from '@/lib/dograh';
 import { isTerminal } from '@/lib/campaign-state';
+import { getMaxRetries } from '@/lib/call-behavior';
 
 /**
  * Adjusts concurrency / retry behaviour on a campaign that has already
@@ -73,6 +74,24 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         const n = Number(rc.max_retries);
         if (!Number.isInteger(n) || n < 0 || n > 10) {
           return NextResponse.json({ error: 'retry_config.max_retries must be an integer between 0 and 10' }, { status: 400 });
+        }
+        // The same ceiling the launch route applies. Without it, editing a
+        // running campaign was a way to reinstate the extra dials the launch had
+        // just capped - the provider counts max_retries as calls AFTER the
+        // first, so the budget here is maxRetries - 1.
+        const maxRetries = await getMaxRetries(supabase);
+        const providerBudget = Math.max(0, maxRetries - 1);
+        if (n > providerBudget) {
+          return NextResponse.json(
+            {
+              error:
+                `Retries within a campaign cannot exceed ${providerBudget}, because "Max retries" on the ` +
+                `AI Agent page limits each person to ${maxRetries} call${maxRetries === 1 ? '' : 's'} in total ` +
+                `(the first call plus ${providerBudget} retr${providerBudget === 1 ? 'y' : 'ies'}). ` +
+                `Raise that setting first if you want more.`,
+            },
+            { status: 400 },
+          );
         }
       }
       if (rc.retry_delay_seconds !== undefined) {

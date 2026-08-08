@@ -311,12 +311,13 @@ export async function POST(request: Request) {
     // can restore each lead's exact prior state instead of guessing 'new' -
     // a retry_pending or follow_up lead rolled back that way would silently
     // lose its retry/callback history.
-    const { callGapMinutes } = await getCallBehaviorSettings(supabase);
+    const { callGapMinutes, maxRetries } = await getCallBehaviorSettings(supabase);
     let query = applyLeadSegmentFilter(
       supabase.from('leads').select('id, status, follow_up_date').not('phone', 'is', null),
       leadSegment,
       callGapMinutes,
       vertical,
+      maxRetries,
     );
 
     if (target_segment?.city) query = query.eq('city', target_segment.city);
@@ -365,6 +366,9 @@ export async function POST(request: Request) {
       // Without it a concurrent solar launch could claim a lead this loan
       // campaign is about to dial.
       vertical,
+      // Same reason: the retry ceiling must hold at claim time too, or a lead
+      // whose last call landed between selection and claim gets one dial too many.
+      maxRetries,
     ).select('id, name, phone, city, property_type, budget, email');
 
     if (claimError) {
@@ -398,6 +402,48 @@ export async function POST(request: Request) {
       throw new Error(`No calling agent is configured for the ${VERTICAL_LABELS[vertical]} business line.`);
     }
 
+    // --- Reconcile the two retry layers -----------------------------------
+    // The provider counts `max_retries` as dials AFTER the first one, so
+    // max_retries: 2 places THREE calls. Our own sweep then re-queues the same
+    // lead into a later campaign, which dialled it three more times - six real
+    // calls for a setting that reads "2". Verified in production on 2026-08-06:
+    // seven leads took 3 dials in campaign c37a52b1 and 3 more in fb61dde5.
+    //
+    // `call_behavior.maxRetries` is now the ONE number that matters and it means
+    // total dials per person. The provider gets maxRetries - 1 so a full
+    // in-campaign burst lands exactly on the quota, and the segment filter above
+    // refuses any lead whose quota is already spent - so the two layers add up
+    // to the setting instead of multiplying.
+    const providerMaxRetries = Math.max(0, maxRetries - 1);
+    const requestedProviderRetries = Number(retry_config?.max_retries);
+    const effectiveProviderRetries = Number.isFinite(requestedProviderRetries)
+      ? Math.min(requestedProviderRetries, providerMaxRetries)
+      : providerMaxRetries;
+
+    if (Number.isFinite(requestedProviderRetries) && requestedProviderRetries > providerMaxRetries) {
+      preflightWarning =
+        [
+          preflightWarning,
+          `Retries within this campaign were reduced from ${requestedProviderRetries} to ${effectiveProviderRetries} ` +
+            `so nobody is called more than ${maxRetries} time${maxRetries === 1 ? '' : 's'} in total ` +
+            `(your "Max retries" setting on the AI Agent page).`,
+        ]
+          .filter(Boolean)
+          .join(' ');
+    }
+
+    const effectiveRetryConfig = {
+      retry_delay_seconds: 120,
+      retry_on_busy: true,
+      retry_on_no_answer: true,
+      retry_on_voicemail: true,
+      ...(retry_config ?? {}),
+      // Both AFTER the spread: a client that sends `enabled: true, max_retries: 5`
+      // must not be able to reinstate the retries we just capped.
+      max_retries: effectiveProviderRetries,
+      enabled: effectiveProviderRetries > 0,
+    };
+
     const dograhCampaign = await dograh.createCampaign({
       name,
       workflow_id: workflowId,
@@ -406,14 +452,7 @@ export async function POST(request: Request) {
       // Reusing the campaign row id means a retried request cannot create a second
       // provider campaign for the same launch.
       idempotencyKey: `campaign-${campaignRunId}`,
-      retry_config: retry_config ?? {
-        enabled: true,
-        max_retries: 2,
-        retry_delay_seconds: 120,
-        retry_on_busy: true,
-        retry_on_no_answer: true,
-        retry_on_voicemail: true,
-      },
+      retry_config: effectiveRetryConfig,
       schedule_config: schedule_config ?? undefined,
       circuit_breaker: {
         enabled: true,
@@ -434,6 +473,10 @@ export async function POST(request: Request) {
         source_id: presigned.file_key,
         actual_count: claimed.length,
         status: 'queued',
+        // The CAPPED config, not what the client asked for - the campaign row is
+        // what the settings dialog reads back, and it must show what is really
+        // in force at the provider.
+        retry_config: effectiveRetryConfig,
       })
       .eq('id', campaignRunId);
 

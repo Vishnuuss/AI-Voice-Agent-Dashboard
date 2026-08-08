@@ -1085,7 +1085,11 @@ function CampaignsPage({
     setSettingsCampaign(campaign)
     setSettingsForm({
       concurrency: String(campaign.concurrency || 1),
-      maxRetries: String(campaign.retry_config?.max_retries ?? 2),
+      // 1, not 2: this is redials AFTER the first call, so the default matches a
+      // 2-calls-per-person policy. Defaulting to 2 meant a legacy campaign with
+      // no retry_config opened showing three calls' worth and the server
+      // (correctly) refused to save it.
+      maxRetries: String(campaign.retry_config?.max_retries ?? 1),
       retryDelaySeconds: String(campaign.retry_config?.retry_delay_seconds ?? 120),
       // Dograh's PATCH replaces the whole retry_config object rather than
       // merging it, so these have to round-trip through the form too -
@@ -1478,7 +1482,7 @@ function CampaignsPage({
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <label className="text-sm font-medium" htmlFor="settings-max-retries">
-                  Max retries
+                  Redials after the first call
                 </label>
                 <Input
                   id="settings-max-retries"
@@ -1488,6 +1492,10 @@ function CampaignsPage({
                   value={settingsForm.maxRetries}
                   onChange={(e) => setSettingsForm({ ...settingsForm, maxRetries: e.target.value })}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Redials only — the first call is not counted here. Limited by &ldquo;Max retries&rdquo; on the AI
+                  Agent page, which caps total calls per person.
+                </p>
               </div>
               <div className="grid gap-2">
                 <label className="text-sm font-medium" htmlFor="settings-retry-delay">
@@ -2435,16 +2443,16 @@ function AIAgentPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Retry sweep</CardTitle>
+          <CardTitle>Calling limits</CardTitle>
           <CardDescription>
-            Our own follow-up logic — separate from a campaign&apos;s own retry settings (set per-campaign when you
-            launch it).
+            The hard cap on how often one person is dialled. This governs every campaign — a campaign&apos;s own
+            redial setting can only go lower, never higher.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="grid gap-2">
             <label className="text-sm font-medium" htmlFor="max-retries">
-              Max attempts before giving up
+              Max calls per person (total)
             </label>
             <Input
               id="max-retries"
@@ -2455,7 +2463,8 @@ function AIAgentPage({
               onChange={(e) => setForm({ ...form, maxRetries: e.target.value })}
             />
             <p className="text-xs text-muted-foreground">
-              After this many unanswered attempts, a lead moves to Unreachable.
+              Counts the first call and every redial, across all campaigns. Set it to 2 and nobody is ever rung more
+              than twice. After that the lead moves to Unreachable.
             </p>
           </div>
           <div className="grid gap-2">
@@ -3349,7 +3358,6 @@ export function LeadCommandDashboard() {
   // real values that would apply either way, not different-looking ones.
   const [advanced, setAdvanced] = useState({
     concurrency: "1",
-    maxRetries: "2",
     retryDelaySeconds: "120",
     retryOnBusy: true,
     retryOnNoAnswer: true,
@@ -3482,11 +3490,6 @@ export function LeadCommandDashboard() {
       toast.error("Concurrency must be a whole number between 1 and 100")
       return
     }
-    const maxRetries = Number(advanced.maxRetries)
-    if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 10) {
-      toast.error("Retries within campaign must be a whole number between 0 and 10")
-      return
-    }
     const retryDelaySeconds = Number(advanced.retryDelaySeconds)
     if (!Number.isInteger(retryDelaySeconds) || retryDelaySeconds < 30 || retryDelaySeconds > 3600) {
       toast.error("Retry delay must be a whole number of seconds between 30 and 3600")
@@ -3502,9 +3505,9 @@ export function LeadCommandDashboard() {
         lead_segment: newCampaignSegment,
         vertical: campaignVertical,
         concurrency,
+        // max_retries is deliberately NOT sent: the server derives it from the
+        // "Max retries" setting so the total per person is capped in one place.
         retry_config: {
-          enabled: true,
-          max_retries: maxRetries,
           retry_delay_seconds: retryDelaySeconds,
           retry_on_busy: advanced.retryOnBusy,
           retry_on_no_answer: advanced.retryOnNoAnswer,
@@ -3512,6 +3515,7 @@ export function LeadCommandDashboard() {
         },
       })
       toast.success(`Campaign launched! ${result?.leads_queued ?? result?.actual_count ?? 0} leads queued.`)
+      if (Array.isArray(result?.warnings)) result.warnings.forEach((w: string) => toast.warning(w))
       setCampaignOpen(false)
       setNewCampaignName("")
       refreshAll()
@@ -4151,21 +4155,21 @@ export function LeadCommandDashboard() {
                   />
                   <p className="text-xs text-muted-foreground">How many calls run at once.</p>
                 </div>
+                {/*
+                  There used to be a second "Retries within this campaign" box
+                  here. It was independent of the "Max retries" setting on the AI
+                  Agent page, and the two multiplied: 2 here meant three calls in
+                  this campaign, and the setting then allowed the lead into a
+                  later campaign for three more. Six real calls for two settings
+                  that both read "2". There is now one number, in one place.
+                */}
                 <div className="grid gap-2">
-                  <label className="text-sm font-medium" htmlFor="adv-max-retries">
-                    Retries within this campaign
-                  </label>
-                  <Input
-                    id="adv-max-retries"
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={advanced.maxRetries}
-                    onChange={(e) => setAdvanced({ ...advanced, maxRetries: e.target.value })}
-                  />
+                  <span className="text-sm font-medium">Calls per person</span>
+                  <p className="text-sm">
+                    Capped by <span className="font-medium">Max retries</span> on the AI Agent page.
+                  </p>
                   <p className="text-xs text-muted-foreground">
-                    Separate from the retry sweep in AI agent settings — this governs Dograh redialling within this
-                    one campaign.
+                    Nobody is dialled more than that many times in total, counting every campaign they appear in.
                   </p>
                 </div>
                 <div className="grid gap-2">

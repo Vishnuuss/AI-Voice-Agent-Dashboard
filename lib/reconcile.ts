@@ -34,13 +34,20 @@ export async function applyRunResult(
   const runId = run.id;
   if (runId == null) return 'error';
 
-  const { data: existingLog } = await supabase
+  // `.limit(1)` + array, NOT `.maybeSingle()`. maybeSingle ERRORS when more than
+  // one row matches, and the error was being discarded - so `data` came back
+  // null, the run looked unseen, and every sweep inserted yet another copy and
+  // incremented retry_count again. Once a run had two rows it grew without
+  // bound: one live lead reached 47 log rows and retry_count 31 for 3 real calls.
+  // The unique index (scripts/006) prevents duplicates from arising at all; this
+  // makes the check correct even if one ever slips through.
+  const { data: existingLogs } = await supabase
     .from('call_logs')
     .select('id')
     .eq('dograh_run_id', runId)
-    .maybeSingle();
+    .limit(1);
 
-  if (existingLog) return 'duplicate';
+  if (existingLogs && existingLogs.length > 0) return 'duplicate';
 
   const context: Record<string, any> = run.gathered_context ?? {};
   // The CSV row this call was dialled from. THIS is where Dograh puts the

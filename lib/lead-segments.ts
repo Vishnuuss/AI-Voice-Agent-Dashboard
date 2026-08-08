@@ -48,6 +48,18 @@ export function isValidLeadSegment(value: unknown): value is LeadSegment {
  * and the segment-count route each applied it themselves they would eventually
  * drift, and the dialog would promise a number the launch could not deliver.
  * Null/undefined means "All", which is no filter at all.
+ *
+ * `maxRetries` (the AI Agent page's "Max retries" setting) is the HARD CEILING
+ * on how many times one person is ever dialled. It is enforced here, on the
+ * shared filter, because that is the one place every automatic path goes
+ * through - so no campaign can dial a lead that has already had its quota, no
+ * matter which layer asked for the call.
+ *
+ * It is applied ONLY to the two automatic segments, `new` and `retry_pending`.
+ * `follow_up`/`follow_up_scheduled` are callbacks the customer ASKED for and
+ * `unreachable` is a deliberate manual override - capping those would mean
+ * refusing to ring someone back at the time they requested, which is a
+ * different thing entirely from retrying a number that did not answer.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function applyLeadSegmentFilter(
@@ -55,11 +67,19 @@ export function applyLeadSegmentFilter(
   segment: LeadSegment,
   retryGapMinutes = 0,
   vertical?: Vertical | null,
+  maxRetries?: number,
 ) {
   query = applyVerticalFilter(query, vertical ?? null);
+
+  // A lead that has already been dialled its full quota is out of the automatic
+  // rotation for good. `retry_count` is the count of DISTINCT calls placed (one
+  // row per dograh_run_id), so `retry_count >= maxRetries` means the quota is spent.
+  const capped = (q: any) =>
+    Number.isFinite(maxRetries) ? q.lt('retry_count', Math.max(0, maxRetries as number)) : q;
+
   switch (segment) {
     case 'retry_pending': {
-      let q = query.eq('status', 'retry_pending');
+      let q = capped(query.eq('status', 'retry_pending'));
       if (retryGapMinutes > 0) {
         const cutoff = new Date(Date.now() - retryGapMinutes * 60_000).toISOString();
         // A lead with no last_attempt_at yet (should not happen for
@@ -86,7 +106,7 @@ export function applyLeadSegmentFilter(
       return query.in('status', ['no_answer', 'unreachable']);
     case 'new':
     default:
-      return query.eq('status', 'new');
+      return capped(query.eq('status', 'new'));
   }
 }
 

@@ -14,7 +14,7 @@ import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
 export async function GET(request: Request) {
   try {
     const supabase = createServerClient();
-    const { callGapMinutes } = await getCallBehaviorSettings(supabase);
+    const { callGapMinutes, maxRetries } = await getCallBehaviorSettings(supabase);
     // Same business line the launch will use, so the dialog cannot offer 200
     // "New" leads and then dial only the 40 that belong to this vertical.
     const vertical = verticalFromParam(new URL(request.url).searchParams.get('vertical'));
@@ -26,6 +26,9 @@ export async function GET(request: Request) {
           segment.value,
           callGapMinutes,
           vertical,
+          // Same ceiling the launch applies, so the dialog can never offer 40
+          // "Retry pending" leads and then dial only the 12 with quota left.
+          maxRetries,
         );
         if (error) {
           console.error('[campaigns/segments] count failed for', segment.value, error);
