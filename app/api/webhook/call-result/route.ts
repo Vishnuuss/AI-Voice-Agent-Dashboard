@@ -176,6 +176,11 @@ export async function POST(request: Request) {
 
     // --- Resolve the lead -------------------------------------------------
     let lead: any = null;
+    // Set when a phone DID match a lead but in another business line. Without
+    // this the call is reported as a plain "lead_not_found", which reads like a
+    // bad number - and a test call to a number already saved under a different
+    // line silently disappears with no call_log and no row on screen.
+    let mismatchedVertical: string | null = null;
 
     if (leadIdFromPayload) {
       const { data } = await supabase.from('leads').select('*').eq('id', leadIdFromPayload).maybeSingle();
@@ -219,8 +224,10 @@ export async function POST(request: Request) {
         // writing a solar call's score and recording onto the same person's
         // loan lead is invisible and corrupts what the client bills from.
         if (isWrongVerticalMatch(match.vertical, expectedVertical)) {
+          mismatchedVertical = String(match.vertical);
           console.warn('[webhook] phone matched a lead in a different business line; refusing it', {
             runId,
+            phone,
             leadVertical: match.vertical,
             expected: expectedVertical,
           });
@@ -234,12 +241,28 @@ export async function POST(request: Request) {
 
     if (!lead) {
       // Acknowledge so the provider stops retrying an event we can never match.
-      console.warn('[webhook] no matching lead for run', runId);
+      if (mismatchedVertical) {
+        console.error(
+          `[webhook] DROPPED a ${expectedVertical} call: ${phone} is saved as a ${mismatchedVertical} lead. ` +
+            'Add the number as a lead in this business line - (phone, vertical) is the key, so the same ' +
+            'number can exist in both.',
+          { runId },
+        );
+      } else {
+        console.warn('[webhook] no matching lead for run', runId);
+      }
       // Still bill it. A call we cannot match to a lead was still dialled, still
       // connected and still cost money; the charge is metered from Dograh and
       // does not depend on the lead at all.
       await chargeForRun(supabase, runId);
-      return NextResponse.json({ success: false, reason: 'lead_not_found' }, { status: 200 });
+      return NextResponse.json(
+        {
+          success: false,
+          reason: mismatchedVertical ? 'lead_vertical_mismatch' : 'lead_not_found',
+          ...(mismatchedVertical ? { lead_vertical: mismatchedVertical, call_vertical: expectedVertical } : {}),
+        },
+        { status: 200 },
+      );
     }
 
     // --- Score the call ---------------------------------------------------
