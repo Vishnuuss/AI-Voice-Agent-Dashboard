@@ -182,6 +182,16 @@ export interface ScoreInput {
    * a perfect "100" call would be re-scored down to about 60.
    */
   lead_score?: unknown;
+  /**
+   * Which business line the call was for. Only 'solar' changes anything today:
+   * it selects the solar ladder below instead of the loan one. Anything else,
+   * including undefined, keeps the existing loan behaviour untouched.
+   */
+  vertical?: unknown;
+  /** Solar: 'own' or 'rent'. Rent is a hard disqualification - no roof of their own. */
+  house_ownership?: unknown;
+  /** Solar: whether they said they are planning / thinking about solar. */
+  solar_planning?: unknown;
 }
 
 export interface ScoreResult {
@@ -238,6 +248,55 @@ export function scoreCall(input: ScoreInput): ScoreResult {
     return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Asked not to be called again' };
   }
 
+  // ── The solar ladder ────────────────────────────────────────────────────
+  //
+  // A different business line asks different questions, so it needs its own
+  // ladder - running a solar call through the loan rules scored it on a loan
+  // type nobody asked about and landed every solar lead on the flat fallback.
+  //
+  //   100  own house AND planning solar  -> hand to the executive today
+  //    50  own house, no plan (or never said)  -> the roof is there, the intent is not
+  //     0  rented house                  -> cannot install; not a lead at any price
+  //    25  talked but never answered either question (the engaged floor below)
+  const isSolar = String(input.vertical ?? '').trim().toLowerCase() === 'solar';
+
+  if (isSolar) {
+    const house = String(input.house_ownership ?? '').trim().toLowerCase();
+    const planning = input.solar_planning;
+
+    if (house === 'rent') {
+      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Rented house — rooftop solar needs their own house' };
+    }
+
+    if (house === 'own') {
+      if (isTruthyFlag(planning)) {
+        return { score: 100, qualification: 'qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Own house and planning solar — executive to call' };
+      }
+      // Own house is worth 50 whether they said "not now" or never got to the
+      // second question: the roof is theirs, so they stay callable later.
+      const said = planning === false || String(planning ?? '').trim().toLowerCase() === 'false';
+      return {
+        score: 50,
+        qualification: 'not_qualified',
+        outcome,
+        answered,
+        durationSeconds,
+        scoredBy: 'rules',
+        reason: said ? 'Own house but not planning solar right now' : 'Own house, did not say whether they are planning solar',
+      };
+    }
+
+    // Never said own or rent. A clear "not planning solar" is still a refusal.
+    if (planning === false || String(planning ?? '').trim().toLowerCase() === 'false') {
+      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Not planning solar' };
+    }
+    if (isTruthyFlag(planning)) {
+      return { score: 50, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Planning solar but never said whether the house is theirs' };
+    }
+    // Nothing usable. Falls through to the engaged floor (25) at the end, which
+    // is exactly "they simply talked" - deliberately below 50.
+  }
+
   // ── The loan ladder ─────────────────────────────────────────────────────
   //
   // Computed HERE from the fields the agent extracted, not taken from a number
@@ -249,18 +308,23 @@ export function scoreCall(input: ScoreInput): ScoreResult {
   //   100  named a loan type      -> a real, actionable lead
   //    50  needs a loan, no type  -> worth a callback, not yet actionable
   //     0  said no                -> not a lead
-  if (isRealLoanType(input.loan_type)) {
-    const type = String(input.loan_type).trim();
-    return { score: 100, qualification: 'qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: `Named a loan type: ${type}` };
-  }
+  // Skipped for solar: a solar call that reached here answered neither of its own
+  // questions, and phrasing that as "did not name a loan type" would put a loan
+  // sentence on a solar lead's record.
+  if (!isSolar) {
+    if (isRealLoanType(input.loan_type)) {
+      const type = String(input.loan_type).trim();
+      return { score: 100, qualification: 'qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: `Named a loan type: ${type}` };
+    }
 
-  if (isTruthyFlag(input.interested)) {
-    return { score: 50, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they need a loan but did not name a type' };
-  }
+    if (isTruthyFlag(input.interested)) {
+      return { score: 50, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they need a loan but did not name a type' };
+    }
 
-  // Interest was explicitly denied - a real "no", not merely a missing field.
-  if (input.interested === false || String(input.interested ?? '').trim().toLowerCase() === 'false') {
-    return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they do not need a loan' };
+    // Interest was explicitly denied - a real "no", not merely a missing field.
+    if (input.interested === false || String(input.interested ?? '').trim().toLowerCase() === 'false') {
+      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they do not need a loan' };
+    }
   }
 
   // Nothing was extracted at all - the call connected but produced no answers.

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getMaxRetries } from '@/lib/call-behavior';
+import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
   buildGatheredContext,
@@ -10,7 +11,7 @@ import {
   parseFollowUpDate,
   usableMediaUrl,
 } from '@/lib/call-context';
-import { isWrongVerticalMatch } from '@/lib/verticals';
+import { DEFAULT_VERTICAL, isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
 import type { DograhRunRecord } from '@/types';
 
 const MAX_NOTES_LENGTH = 2_000;
@@ -103,7 +104,14 @@ export async function applyRunResult(
   // loan_amount / loan_type, not interested / budget / visit_date.
   const signals = extractCallSignals(run as Record<string, any>);
 
+  // Which ladder to score on, same precedence as the webhook: what the agent
+  // said it was calling for, then the lead's own column.
+  const callVertical = parseVertical(context.vertical ?? initial.vertical) ?? parseVertical(lead.vertical) ?? DEFAULT_VERTICAL;
+
   const result = scoreCall({
+    vertical: callVertical,
+    house_ownership: signals.house_ownership,
+    solar_planning: signals.solar_planning,
     interested: signals.interested,
     budget: signals.budget,
     visit_date: signals.visit_date,
@@ -183,13 +191,19 @@ export async function applyRunResult(
     if (recording) update.recording_url = recording;
     if (transcript) update.transcript_url = transcript;
     if (signals.budget) update.budget = signals.budget;
-    if (signals.loan_type) update.property_type = signals.loan_type;
+    // Never on a solar call: property_type holds the LOAN type, and the solar
+    // answers belong in qual_data where the dashboard reads them.
+    if (signals.loan_type && callVertical !== 'solar') update.property_type = signals.loan_type;
+    // Solar's two answers get their own columns too (007_solar_fields.sql).
+    if (signals.house_ownership) update.house_ownership = signals.house_ownership;
+    if (signals.solar_planning !== null) update.solar_planning = signals.solar_planning;
 
     const followUp = parseFollowUpDate(signals.visit_date);
     if (followUp) update.follow_up_date = followUp;
   }
 
-  const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id);
+  // Same missing-column guard as the webhook - see lib/lead-update.ts.
+  const { error: updateError } = await updateLead(supabase, lead.id, update);
   if (updateError) {
     console.error('[reconcile] lead update failed', updateError);
     return 'error';

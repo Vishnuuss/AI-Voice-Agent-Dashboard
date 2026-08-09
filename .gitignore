@@ -16,3 +16,6 @@ node_modules
 
 # TypeScript incremental build cache — regenerated on every build
 tsconfig.tsbuildinfo
+
+# Scratch space for the verify scripts — regenerated on every run
+.tmp/

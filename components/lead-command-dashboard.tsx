@@ -293,6 +293,41 @@ function loanTypeOf(lead: any): string | null {
 }
 
 /**
+ * "Own house" / "Rented house".
+ *
+ * Read from the column first and qual_data second: the column only exists once
+ * 007_solar_fields.sql has been run, and any lead scored before that has the
+ * answer only in qual_data. Both paths are written by the same webhook.
+ */
+function houseOf(lead: any): string | null {
+  const raw = lead?.house_ownership ?? lead?.qual_data?.house_ownership
+  if (raw === "own") return "Own house"
+  if (raw === "rent") return "Rented house"
+  return null
+}
+
+/** "Planning solar" / "Not planning" — null when they never got to that question. */
+function solarPlanOf(lead: any): string | null {
+  const raw = lead?.solar_planning ?? lead?.qual_data?.solar_planning
+  if (raw === true) return "Planning solar"
+  if (raw === false) return "Not planning"
+  return null
+}
+
+/**
+ * The one fact that matters about a lead — which is a different fact per
+ * business line. A loan lead's is the loan type; a solar lead's is whether the
+ * house is theirs and whether they are planning solar. Reading the loan type on
+ * a solar lead was showing "Own house loan", which is not a thing anyone sells.
+ */
+function requirementOf(lead: any): string | null {
+  if (verticalOf(lead) === "solar") {
+    return [houseOf(lead), solarPlanOf(lead)].filter(Boolean).join(" · ") || null
+  }
+  return loanTypeOf(lead)
+}
+
+/**
  * Why the lead has the score it has, and who decided it. Written by the webhook
  * into qual_data.scoring. Older leads predate it and get a plain fallback rather
  * than an invented explanation.
@@ -363,8 +398,15 @@ function EmptyRow({ colSpan, children }: { colSpan: number; children: React.Reac
   )
 }
 
-/** Shared lead table row, used by the overview, leads and follow-up tables. */
-function LeadRow({ lead, onSelect, columns }: { lead: any; onSelect: (lead: any) => void; columns: "compact" | "full" }) {
+/**
+ * Shared lead table row, used by the overview, leads and follow-up tables.
+ *
+ * `solar` switches the two middle columns from the loan pair (requirement,
+ * budget) to the solar pair (house, plan). It follows the header's business-line
+ * switch, not the individual lead: a table has one set of headers, so the
+ * columns can only match the line being viewed.
+ */
+function LeadRow({ lead, onSelect, columns, solar = false }: { lead: any; onSelect: (lead: any) => void; columns: "compact" | "full"; solar?: boolean }) {
   const score = lead.score ?? 0
   const scoreData = getScoreLabel(score)
   return (
@@ -397,15 +439,30 @@ function LeadRow({ lead, onSelect, columns }: { lead: any; onSelect: (lead: any)
           <TableCell>
             <span className="text-sm text-muted-foreground">{lead.city || "—"}</span>
           </TableCell>
-          {/* What the caller actually asked for. The single most useful fact
-              about a loan lead, so it earns its own column rather than hiding
-              in the detail drawer. */}
-          <TableCell>
-            <span className="text-sm">{loanTypeOf(lead) || "—"}</span>
-          </TableCell>
-          <TableCell>
-            <span className="text-sm">{lead.budget || "—"}</span>
-          </TableCell>
+          {/* The solar agent asks two questions and neither is a loan type or a
+              budget, so on the Solar view those two columns ARE the answers. */}
+          {solar ? (
+            <>
+              <TableCell>
+                <span className="text-sm">{houseOf(lead) || "—"}</span>
+              </TableCell>
+              <TableCell>
+                <span className="text-sm">{solarPlanOf(lead) || "—"}</span>
+              </TableCell>
+            </>
+          ) : (
+            <>
+              {/* What the caller actually asked for. The single most useful fact
+                  about the lead, so it earns its own column rather than hiding
+                  in the detail drawer. */}
+              <TableCell>
+                <span className="text-sm">{requirementOf(lead) || "—"}</span>
+              </TableCell>
+              <TableCell>
+                <span className="text-sm">{lead.budget || "—"}</span>
+              </TableCell>
+            </>
+          )}
         </>
       )}
       <TableCell>
@@ -426,10 +483,10 @@ function LeadRow({ lead, onSelect, columns }: { lead: any; onSelect: (lead: any)
               {verticalLabelOf(lead)}
             </Badge>
           </div>
-          {/* The single most useful fact about a loan lead, visible without
-              opening the row: which loan they actually asked for. */}
-          {loanTypeOf(lead) && (
-            <span className="text-xs text-muted-foreground">{loanTypeOf(lead)}</span>
+          {/* The single most useful fact about the lead, visible without opening
+              the row: the loan they asked for, or the solar house/plan answer. */}
+          {requirementOf(lead) && (
+            <span className="text-xs text-muted-foreground">{requirementOf(lead)}</span>
           )}
         </div>
       </TableCell>
@@ -799,6 +856,7 @@ function LeadsPage({
   totalPages,
   leadStats,
   isLoading,
+  vertical,
 }: {
   leads: any[]
   onSelectLead: (lead: any, callId?: string | null) => void
@@ -810,7 +868,12 @@ function LeadsPage({
   totalPages: number
   leadStats: any
   isLoading: boolean
+  vertical: VerticalFilter
 }) {
+  // On the Solar view the table shows the solar answers instead of the loan
+  // ones. Only when Solar is actually selected: under "All" the table mixes
+  // business lines and one set of headers cannot describe all four.
+  const solar = vertical === "solar"
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -872,8 +935,19 @@ function LeadsPage({
                 <TableHead>Lead</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Location</TableHead>
-                <TableHead>Loan type</TableHead>
-                <TableHead>Budget / amount</TableHead>
+                {/* Not "Loan type": this table holds all four business lines.
+                    On Solar it becomes the two questions the agent asks. */}
+                {solar ? (
+                  <>
+                    <TableHead>House</TableHead>
+                    <TableHead>Solar plan</TableHead>
+                  </>
+                ) : (
+                  <>
+                    <TableHead>Requirement</TableHead>
+                    <TableHead>Budget / amount</TableHead>
+                  </>
+                )}
                 <TableHead>Score</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Last activity</TableHead>
@@ -885,7 +959,9 @@ function LeadsPage({
                   {isLoading ? "Loading leads…" : "No leads found. Upload a CSV to import leads."}
                 </EmptyRow>
               ) : (
-                leads.map((lead) => <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="full" />)
+                leads.map((lead) => (
+                  <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="full" solar={solar} />
+                ))
               )}
             </TableBody>
           </Table>
@@ -2937,14 +3013,31 @@ function LeadDetailSheet({
                 <p className="text-xs text-muted-foreground">Source</p>
                 <p className="text-lg font-semibold">{lead.source || "—"}</p>
               </div>
-              <div className="rounded-lg bg-secondary p-3">
-                <p className="text-xs text-muted-foreground">Amount / budget</p>
-                <p className="text-sm font-semibold">{lead.budget || qualData.loan_amount || "—"}</p>
-              </div>
-              <div className="rounded-lg bg-secondary p-3">
-                <p className="text-xs text-muted-foreground">Loan type</p>
-                <p className="text-sm font-semibold">{loanTypeOf(lead) || "—"}</p>
-              </div>
+              {/* A solar call asks two questions and neither of them is a loan
+                  type or a budget, so the solar lead gets its own two tiles. */}
+              {verticalOf(lead) === "solar" ? (
+                <>
+                  <div className="rounded-lg bg-secondary p-3">
+                    <p className="text-xs text-muted-foreground">House</p>
+                    <p className="text-sm font-semibold">{houseOf(lead) || "—"}</p>
+                  </div>
+                  <div className="rounded-lg bg-secondary p-3">
+                    <p className="text-xs text-muted-foreground">Solar plan</p>
+                    <p className="text-sm font-semibold">{solarPlanOf(lead) || "—"}</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-lg bg-secondary p-3">
+                    <p className="text-xs text-muted-foreground">Amount / budget</p>
+                    <p className="text-sm font-semibold">{lead.budget || qualData.loan_amount || "—"}</p>
+                  </div>
+                  <div className="rounded-lg bg-secondary p-3">
+                    <p className="text-xs text-muted-foreground">Loan type</p>
+                    <p className="text-sm font-semibold">{loanTypeOf(lead) || "—"}</p>
+                  </div>
+                </>
+              )}
             </div>
 
             {(qualData.profession || qualData.summary || qualData.customer_intent) && (
@@ -3605,6 +3698,7 @@ export function LeadCommandDashboard() {
             totalPages={totalPages}
             leadStats={leadStats}
             isLoading={leadsLoading}
+            vertical={vertical}
           />
         )
       case "Calls":

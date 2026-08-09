@@ -105,10 +105,35 @@ function pick(flat: Record<string, any>, keys: string[]): unknown {
   return null;
 }
 
+/** What the solar agent asks first: is the house theirs, or rented. */
+export type HouseOwnership = 'own' | 'rent';
+
+/**
+ * Turns whatever the solar agent extracted into 'own' / 'rent' / null.
+ *
+ * The value arrives as free text from an LLM listening to spoken Telugu, so it
+ * can be "own", "own house", "rented", "tenant", "సొంత ఇల్లు" or "అద్దె ఇల్లు".
+ * Anything it cannot place stays null - "no opinion" - rather than being guessed
+ * into one of the two, because the two carry opposite scores (50 vs 0).
+ */
+export function parseHouseOwnership(value: unknown): HouseOwnership | null {
+  const s = cleanString(value)?.toLowerCase();
+  if (!s) return null;
+  // Rent is checked first: "not own house" and "own kaadu, rent" both contain "own".
+  if (/rent|tenant|lease|అద్దె|కిరాయి|అద్దెకి/.test(s)) return 'rent';
+  if (/\bown\b|owned|self|sonta|independent|సొంత|సొంతం|మా\s*ఇల్లు/.test(s)) return 'own';
+  if (/apartment|flat/.test(s)) return null; // says nothing about who owns it
+  return null;
+}
+
 export interface CallSignals {
   interested: boolean | null;
   budget: string | null;
   loan_type: string | null;
+  /** Solar: does the customer own the house. Rent is an instant disqualification. */
+  house_ownership: HouseOwnership | null;
+  /** Solar: are they planning / thinking about putting solar on it. */
+  solar_planning: boolean | null;
   profession: string | null;
   monthly_income: string | null;
   existing_emi: string | null;
@@ -194,16 +219,33 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
   }
 
   const interested = cleanBoolean(
-    pick(flat, ['interested', 'loan_required', 'is_interested', 'lead_interested']),
+    pick(flat, ['interested', 'loan_required', 'is_interested', 'lead_interested', 'solar_interest']),
   );
   const qualifiedFlag = cleanBoolean(pick(flat, ['qualified', 'is_qualified']));
+
+  const vertical = parseVertical(pick(flat, ['vertical', 'business_line', 'product_line', 'agent_type']));
+
+  // `property_type` is the solar agent's word for the HOUSE, and the loan
+  // agent's column for the loan type. Reading it as a loan type on a solar call
+  // is what put "Own house loan" in the dashboard's Loan type column, so on a
+  // solar call it is deliberately not one of the loan aliases.
+  const loanTypeAliases =
+    vertical === 'solar'
+      ? ['loan_type', 'loan_category', 'product']
+      : ['loan_type', 'loan_category', 'product', 'property_type'];
 
   return {
     // Fall back to the agent's own "qualified" verdict when it never set an
     // explicit interest flag - otherwise a good call reads as "no signal".
     interested: interested ?? qualifiedFlag,
     budget: cleanString(pick(flat, ['budget', 'loan_amount', 'amount', 'requested_amount', 'loan_budget'])),
-    loan_type: cleanString(pick(flat, ['loan_type', 'loan_category', 'product', 'property_type'])),
+    loan_type: cleanString(pick(flat, loanTypeAliases)),
+    house_ownership: parseHouseOwnership(
+      pick(flat, ['house_ownership', 'own_house', 'house_type', 'home_ownership', 'ownership', 'property_type']),
+    ),
+    solar_planning: cleanBoolean(
+      pick(flat, ['solar_planning', 'planning_solar', 'solar_plan', 'planning_for_solar', 'solar_interest']),
+    ),
     profession: cleanString(pick(flat, ['profession', 'occupation', 'income_type', 'employment_type'])),
     monthly_income: cleanString(pick(flat, ['monthly_income', 'income', 'salary'])),
     existing_emi: cleanString(pick(flat, ['existing_emi', 'current_emi', 'emi'])),
@@ -215,7 +257,7 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     customer_name: cleanString(pick(flat, ['customer_name', 'name', 'lead_name'])),
     qualified_flag: qualifiedFlag,
     lead_score: cleanString(pick(flat, ['lead_score', 'score', 'call_score'])),
-    vertical: parseVertical(pick(flat, ['vertical', 'business_line', 'product_line', 'agent_type'])) ?? DEFAULT_VERTICAL,
+    vertical: vertical ?? DEFAULT_VERTICAL,
   };
 }
 
@@ -232,6 +274,10 @@ export function hasQualificationSignal(signals: CallSignals): boolean {
     signals.interested !== null ||
       signals.budget ||
       signals.loan_type ||
+      // Solar: "rented house" is the whole answer to a solar call. Without it a
+      // rent call carried no signal, so its 0 was never written to the lead.
+      signals.house_ownership ||
+      signals.solar_planning !== null ||
       signals.profession ||
       signals.monthly_income ||
       signals.existing_emi ||
@@ -332,6 +378,10 @@ export function buildGatheredContext(
   if (signals.budget) context.loan_amount = signals.budget;
   if (signals.budget) context.budget_confirmed = signals.budget;
   if (signals.loan_type) context.loan_type = signals.loan_type;
+  // Solar's two answers. Stored under their own names so the dashboard can show
+  // "Own house / planning solar" instead of borrowing the loan agent's fields.
+  if (signals.house_ownership) context.house_ownership = signals.house_ownership;
+  if (signals.solar_planning !== null) context.solar_planning = signals.solar_planning;
   if (signals.profession) context.profession = signals.profession;
   if (signals.monthly_income) context.monthly_income = signals.monthly_income;
   if (signals.existing_emi) context.existing_emi = signals.existing_emi;
@@ -363,6 +413,8 @@ export function buildNoteLine(
     `outcome: ${parts.outcome}`,
     parts.score !== null ? `score: ${parts.score}` : null,
     signals.loan_type ? `loan: ${signals.loan_type}` : null,
+    signals.house_ownership ? `house: ${signals.house_ownership === 'own' ? 'own house' : 'rented'}` : null,
+    signals.solar_planning !== null ? `solar plan: ${signals.solar_planning ? 'yes' : 'no'}` : null,
     signals.budget ? `amount: ${signals.budget}` : null,
     signals.profession ? `profession: ${signals.profession}` : null,
     signals.visit_date ? `follow-up: ${signals.visit_date}` : null,

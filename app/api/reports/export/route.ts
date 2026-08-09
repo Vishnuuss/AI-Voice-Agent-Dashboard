@@ -22,10 +22,12 @@ export async function GET(request: Request) {
 
     // loan_type and budget are what makes an exported lead actionable for the
     // loan officer - a name and a score alone do not say what to call about.
+    // house_ownership / solar_planning are the same thing for a solar lead: the
+    // executive picking up the file needs to see "own house, planning solar".
     // score_reason travels with the score so an exported list is auditable.
     const headers = [
       'id', 'name', 'phone', 'email', 'city', 'vertical', 'status', 'qualification', 'score',
-      'loan_type', 'budget', 'score_reason', 'created_at', 'call_outcome',
+      'loan_type', 'house_ownership', 'solar_planning', 'budget', 'score_reason', 'created_at', 'call_outcome',
     ];
     const csvRows = [];
     csvRows.push(headers.join(','));
@@ -44,6 +46,18 @@ export async function GET(request: Request) {
         lead.qualification || '',
         lead.score || 0,
         `"${String(lead.property_type || lead.qual_data?.loan_type || '').replace(/"/g, '""')}"`,
+        // Column first, qual_data second: leads scored before 007_solar_fields.sql
+        // was run carry the answer only in the jsonb.
+        (lead.house_ownership ?? lead.qual_data?.house_ownership) === 'own'
+          ? 'own house'
+          : (lead.house_ownership ?? lead.qual_data?.house_ownership) === 'rent'
+            ? 'rented'
+            : '',
+        (lead.solar_planning ?? lead.qual_data?.solar_planning) === true
+          ? 'yes'
+          : (lead.solar_planning ?? lead.qual_data?.solar_planning) === false
+            ? 'no'
+            : '',
         `"${String(lead.budget || lead.qual_data?.loan_amount || '').replace(/"/g, '""')}"`,
         `"${String(lead.qual_data?.scoring?.reason || '').replace(/"/g, '""')}"`,
         lead.created_at,

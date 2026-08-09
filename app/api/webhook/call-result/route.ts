@@ -6,8 +6,9 @@ import { getBillingConfig, postDebit, toCredits } from '@/lib/billing';
 import { meterSingleRun } from '@/lib/billing-meter';
 import { enforceBalanceGuard } from '@/lib/billing-guard';
 import { getMaxRetries } from '@/lib/call-behavior';
+import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
-import { isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
+import { DEFAULT_VERTICAL, isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
 import {
   buildGatheredContext,
   buildNoteLine,
@@ -242,7 +243,15 @@ export async function POST(request: Request) {
     }
 
     // --- Score the call ---------------------------------------------------
+    // Which ladder to score on. The agent's own hard-coded `vertical` wins (it
+    // knows which script it ran), then the lead's column. Without this a solar
+    // call was scored on the loan rules.
+    const callVertical = expectedVertical ?? parseVertical(lead.vertical) ?? DEFAULT_VERTICAL;
+
     const result = scoreCall({
+      vertical: callVertical,
+      house_ownership: signals.house_ownership,
+      solar_planning: signals.solar_planning,
       interested: signals.interested,
       budget: signals.budget,
       visit_date: signals.visit_date,
@@ -338,7 +347,14 @@ export async function POST(request: Request) {
       if (recording) update.recording_url = recording;
       if (transcript) update.transcript_url = transcript;
       if (signals.budget) update.budget = signals.budget;
-      if (signals.loan_type) update.property_type = signals.loan_type;
+      // `property_type` is the loan agent's column (it holds the loan type). A
+      // solar call must not write into it - its own answers live in qual_data,
+      // which is what the dashboard reads for a solar lead.
+      if (signals.loan_type && callVertical !== 'solar') update.property_type = signals.loan_type;
+      // The solar agent's two answers, in their own columns (007_solar_fields.sql)
+      // as well as in qual_data, so the solar team can query them directly.
+      if (signals.house_ownership) update.house_ownership = signals.house_ownership;
+      if (signals.solar_planning !== null) update.solar_planning = signals.solar_planning;
       if (signals.customer_name && !lead.name) update.name = signals.customer_name;
 
       // The Follow-ups page reads leads.follow_up_date; nothing used to set it, so
@@ -347,7 +363,10 @@ export async function POST(request: Request) {
       if (followUp) update.follow_up_date = followUp;
     }
 
-    const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id);
+    // updateLead, not a bare .update(): the two solar columns only exist once
+    // 007_solar_fields.sql has been run, and a missing column would otherwise
+    // reject the entire update and lose the score with it.
+    const { error: updateError } = await updateLead(supabase, lead.id, update);
 
     if (updateError) {
       console.error('[webhook] failed to update lead', updateError);

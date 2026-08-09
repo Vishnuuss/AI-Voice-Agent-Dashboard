@@ -24,6 +24,13 @@ export interface Lead {
   call_outcome: string | null;
   property_type: string | null;
   budget: string | null;
+  /**
+   * The solar agent's two answers (scripts/007_solar_fields.sql). Optional
+   * because they are null on every non-solar lead, and absent entirely until
+   * that migration has been run - the values also live in qual_data.
+   */
+  house_ownership?: 'own' | 'rent' | null;
+  solar_planning?: boolean | null;
   notes: string | null;
   batch_id: string | null;
   campaign_run_id: string | null;
