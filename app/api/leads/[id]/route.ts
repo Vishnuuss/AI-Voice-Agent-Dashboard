@@ -30,9 +30,52 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: callsError.message }, { status: 500 });
     }
 
+    // The same person can be a lead in several business lines at once — that is
+    // the whole point of the (phone, vertical) key. Each of those is a SEPARATE
+    // lead with its own score, its own recordings and its own transcripts, and
+    // that separation is correct and must not be merged. But this endpoint used
+    // to return only the one row's calls, so opening a solar lead gave no hint
+    // that the same person had also been called by the loan agent, and the client
+    // could not see the two histories side by side.
+    //
+    // So: return the sibling lines as clearly separate blocks, never pooled.
+    let otherLines: any[] = [];
+    if (lead?.phone) {
+      const { data: siblings, error: sibError } = await supabase
+        .from('leads')
+        .select('id, vertical, score, status, qualification, recording_url, transcript_url, created_at, last_attempt_at')
+        .eq('phone', lead.phone)
+        .neq('id', id);
+
+      if (sibError) {
+        // Never fail the whole panel over this — the lead itself must still open.
+        console.error('[leads:GET] sibling business lines lookup failed', sibError);
+      } else if (siblings?.length) {
+        const { data: sibCalls, error: sibCallsError } = await supabase
+          .from('call_logs')
+          .select('*')
+          .in('lead_id', siblings.map((s) => s.id))
+          .order('called_at', { ascending: false });
+
+        if (sibCallsError) console.error('[leads:GET] sibling call history failed', sibCallsError);
+
+        otherLines = siblings.map((s) => {
+          const calls = (sibCalls || []).filter((c) => c.lead_id === s.id);
+          return {
+            ...s,
+            callCount: calls.length,
+            // Its own recordings and its own transcripts, kept under its own
+            // business line. Nothing here is copied onto the lead being viewed.
+            calls,
+          };
+        });
+      }
+    }
+
     return NextResponse.json({
       lead,
-      callHistory: callHistory || []
+      callHistory: callHistory || [],
+      otherLines,
     });
   } catch (error: any) {
     console.error('Unexpected error in GET /api/leads/[id]:', error);

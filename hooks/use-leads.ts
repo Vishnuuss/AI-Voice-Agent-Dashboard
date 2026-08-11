@@ -165,6 +165,10 @@ export function useLeadStats(vertical: VerticalFilter = 'all') {
 export function useLead(id: string | null) {
   const [lead, setLead] = useState<Lead | null>(null);
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
+  // The same phone number in OTHER business lines. Each entry is a separate lead
+  // with its own score, recordings and transcripts — kept apart, never merged
+  // into callHistory above, which belongs to the business line being viewed.
+  const [otherLines, setOtherLines] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -173,6 +177,7 @@ export function useLead(id: string | null) {
     if (!id) {
       setLead(null);
       setCallHistory([]);
+      setOtherLines([]);
       return;
     }
 
@@ -198,6 +203,7 @@ export function useLead(id: string | null) {
       const data = await response.json();
       setLead(data.lead || data);
       setCallHistory(data.callHistory || []);
+      setOtherLines(data.otherLines || []);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setError(err.message || 'An error occurred fetching the lead');
@@ -216,7 +222,7 @@ export function useLead(id: string | null) {
     };
   }, [fetchLead]);
 
-  return { lead, callHistory, isLoading, error, refresh: fetchLead };
+  return { lead, callHistory, otherLines, isLoading, error, refresh: fetchLead };
 }
 
 /** Saves an edit from the lead panel (follow-up date, note, status correction). */
