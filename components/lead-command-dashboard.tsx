@@ -86,6 +86,7 @@ import { createBrowserClient } from "@/lib/supabase-browser"
 import { BsWealthLockupInline } from "@/components/brand/bs-wealth-mark"
 import { IntroSequence } from "@/components/motion/intro-sequence"
 import { Skeleton, StatSkeletonRow } from "@/components/motion/primitives"
+import { CallLeadButton, QuickCallDialog, callBlockedReason } from "@/components/manual-call"
 
 // ─── CONSTANTS & HELPERS ───────────────────────────────
 
@@ -406,7 +407,7 @@ function EmptyRow({ colSpan, children }: { colSpan: number; children: React.Reac
  * switch, not the individual lead: a table has one set of headers, so the
  * columns can only match the line being viewed.
  */
-function LeadRow({ lead, onSelect, columns, solar = false }: { lead: any; onSelect: (lead: any) => void; columns: "compact" | "full"; solar?: boolean }) {
+function LeadRow({ lead, onSelect, columns, solar = false, onCallPlaced }: { lead: any; onSelect: (lead: any) => void; columns: "compact" | "full"; solar?: boolean; onCallPlaced?: () => void }) {
   const score = lead.score ?? 0
   const scoreData = getScoreLabel(score)
   return (
@@ -494,7 +495,13 @@ function LeadRow({ lead, onSelect, columns, solar = false }: { lead: any; onSele
         <StatusBadge status={leadStatusLabel(lead)} />
       </TableCell>
       <TableCell className="text-right text-muted-foreground">
-        {formatDate(lead.last_attempt_at || lead.created_at)}
+        {/* The Call button lives in the existing last cell rather than a new
+            column so both lead tables (and their empty-row colSpans) stay valid.
+            It stops row-click propagation itself, so it cannot open the panel. */}
+        <div className="flex items-center justify-end gap-3">
+          <span>{formatDate(lead.last_attempt_at || lead.created_at)}</span>
+          <CallLeadButton lead={lead} onPlaced={onCallPlaced} />
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -857,6 +864,7 @@ function LeadsPage({
   leadStats,
   isLoading,
   vertical,
+  onCallPlaced,
 }: {
   leads: any[]
   onSelectLead: (lead: any, callId?: string | null) => void
@@ -869,6 +877,7 @@ function LeadsPage({
   leadStats: any
   isLoading: boolean
   vertical: VerticalFilter
+  onCallPlaced?: () => void
 }) {
   // On the Solar view the table shows the solar answers instead of the loan
   // ones. Only when Solar is actually selected: under "All" the table mixes
@@ -960,7 +969,7 @@ function LeadsPage({
                 </EmptyRow>
               ) : (
                 leads.map((lead) => (
-                  <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="full" solar={solar} />
+                  <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="full" solar={solar} onCallPlaced={onCallPlaced} />
                 ))
               )}
             </TableBody>
@@ -2857,7 +2866,7 @@ function LeadDetailSheet({
   onClose: () => void
   onSaved: () => void
 }) {
-  const { lead, callHistory, isLoading, refresh } = useLead(leadId)
+  const { lead, callHistory, otherLines, isLoading, refresh } = useLead(leadId)
   const [openTranscriptId, setOpenTranscriptId] = useState<string | null>(null)
   // Opening from a specific call and being shown eleven attempts is disorienting
   // — you clicked one row and expected that row. The rest stay one click away.
@@ -2967,11 +2976,26 @@ function LeadDetailSheet({
               <StatusBadge status={leadStatusLabel(lead)} />
             </div>
 
+            {/* Have the AI agent call this lead. Distinct from the tel: link
+                below, which opens the operator's OWN phone — these are two very
+                different actions and were both called "Call" until now. */}
+            <div className="mb-2">
+              <CallLeadButton
+                lead={lead}
+                onPlaced={refresh}
+                variant="default"
+                className="w-full"
+              />
+              {callBlockedReason(lead) && (
+                <p className="mt-1 text-xs text-muted-foreground">{callBlockedReason(lead)}</p>
+              )}
+            </div>
+
             {/* Real actions. These used to be three toasts that did nothing. */}
             <div className="flex flex-wrap gap-2">
-              <a href={`tel:${dialable(lead.phone)}`} className={cn(buttonVariants({ size: "sm" }), "flex-1")}>
+              <a href={`tel:${dialable(lead.phone)}`} className={cn(buttonVariants({ size: "sm", variant: "outline" }), "flex-1")}>
                 <Phone data-icon="inline-start" />
-                Call
+                My phone
               </a>
               <a
                 href={`https://wa.me/${dialable(lead.phone).replace(/^\+/, "")}`}
@@ -3121,8 +3145,14 @@ function LeadDetailSheet({
 
             <div>
               <div className="mb-3 flex items-center justify-between gap-2">
+                {/* The business line is named in the heading because the same
+                    person can have a second, completely separate history under
+                    another line — "Call history" alone was ambiguous. */}
                 <h4 className="font-medium">
                   {focusedOnly ? "This call" : "Call history"}
+                  <span className={`ml-2 text-xs font-normal ${verticalStyle(lead).color}`}>
+                    {verticalLabelOf(lead)}
+                  </span>
                 </h4>
                 {focusCallId && callHistory.length > 1 && (
                   <Button
@@ -3234,6 +3264,94 @@ function LeadDetailSheet({
                 </div>
               )}
             </div>
+
+            {/* The same phone number in the OTHER business lines.
+                Each one is a separate lead with its own score, its own
+                recordings and its own transcripts — that separation is correct
+                and is preserved here. They are listed, never merged, so it is
+                obvious at a glance that this person has also been called by
+                another agent, and whose call each recording is. */}
+            {otherLines.length > 0 && (
+              <div>
+                <h4 className="mb-1 font-medium">Same person in other business lines</h4>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {lead?.phone} is also a lead in {otherLines.length === 1 ? "another business line" : `${otherLines.length} other business lines`}.
+                  Each keeps its own score, recordings and transcripts.
+                </p>
+                <div className="flex flex-col gap-3">
+                  {otherLines.map((other: any) => (
+                    <div key={other.id} className="rounded-lg border bg-muted/10 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className={`${VERTICAL_STYLES[verticalOf(other)].color} ${VERTICAL_STYLES[verticalOf(other)].bg} border-transparent`}
+                          >
+                            {VERTICAL_LABELS[verticalOf(other)]}
+                          </Badge>
+                          <span className="text-sm font-medium">Score {other.score ?? 0}/100</span>
+                          <span className="text-xs text-muted-foreground">
+                            {other.callCount} {other.callCount === 1 ? "call" : "calls"} · {other.status}
+                          </span>
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {other.last_attempt_at ? formatDateTime(other.last_attempt_at) : "never called"}
+                        </span>
+                      </div>
+
+                      {other.calls.length === 0 ? (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          No calls under this business line yet.
+                        </p>
+                      ) : (
+                        <div className="mt-3 flex flex-col gap-3">
+                          {other.calls.map((call: any) => (
+                            <div key={call.id} className="rounded-md border border-border/60 bg-background/40 p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <CallOutcomeIcon outcome={call.outcome} />
+                                  <span className="text-xs font-medium">
+                                    {OUTCOME_LABELS[call.outcome] || call.outcome || "Call"}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    attempt #{call.attempt_no ?? 1} · {formatDuration(call.duration)}
+                                  </span>
+                                </div>
+                                <span className="text-xs text-muted-foreground">{formatDateTime(call.called_at)}</span>
+                              </div>
+
+                              {call.recording_url && (
+                                <audio controls preload="none" className="mt-2 w-full" src={call.recording_url} />
+                              )}
+
+                              {call.transcript_url ? (
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="mt-1 h-7 px-2 text-xs"
+                                    onClick={() => setOpenTranscriptId(openTranscriptId === call.id ? null : call.id)}
+                                  >
+                                    {openTranscriptId === call.id ? "Hide transcript" : "Show transcript"}
+                                  </Button>
+                                  {openTranscriptId === call.id && <TranscriptView callId={call.id} />}
+                                </>
+                              ) : (
+                                !call.recording_url && (
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    No recording or transcript was returned for this call.
+                                  </p>
+                                )
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
         </SheetBody>
@@ -3377,8 +3495,17 @@ export function LeadCommandDashboard() {
   // localStorage during the initial render would not match the server-rendered
   // HTML and would hydrate mismatched.
   const [vertical, setVertical] = useState<VerticalFilter>("all")
-  const [uploadVertical, setUploadVertical] = useState<Vertical>(DEFAULT_VERTICAL)
+  // Deliberately NOT seeded from the header switch, and null until the operator
+  // picks one. It used to follow whichever business line was being browsed, which
+  // meant a real estate file opened from the Investing tab was imported as
+  // Investing - silently, with no error, and the rows then collided with that
+  // operator's own earlier mis-filed uploads and were reported as "duplicates".
+  // That is what a client experienced as "my leads are not importing" on
+  // 2026-08-11. The business line is the one fact about an import that cannot be
+  // recovered afterwards, so it is now an explicit choice on every single upload.
+  const [uploadVertical, setUploadVertical] = useState<Vertical | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [quickCallOpen, setQuickCallOpen] = useState(false)
 
   useEffect(() => {
     const saved = window.localStorage.getItem(VERTICAL_STORAGE_KEY)
@@ -3431,10 +3558,19 @@ export function LeadCommandDashboard() {
   // falls back to Loan when the header is on "All".
   const [campaignVertical, setCampaignVertical] = useState<Vertical>(DEFAULT_VERTICAL)
 
+  // A campaign still follows the header switch: it is chosen and confirmed in a
+  // dialog that shows a live lead count for that business line, so a wrong one is
+  // visible before anything dials. An import has no such feedback, so it is left
+  // alone here and must be picked by hand each time.
   useEffect(() => {
     if (vertical !== "all") setCampaignVertical(vertical)
-    setUploadVertical(vertical === "all" ? DEFAULT_VERTICAL : vertical)
   }, [vertical])
+
+  // Cleared every time the dialog opens so the previous import's choice can never
+  // be inherited by the next one.
+  useEffect(() => {
+    if (uploadOpen) setUploadVertical(null)
+  }, [uploadOpen])
 
   // Counted for the same business line the launch will target, so the dialog
   // cannot offer leads the campaign would not actually claim.
@@ -3526,6 +3662,13 @@ export function LeadCommandDashboard() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    // Cannot happen from the dialog (the button is disabled until a line is
+    // picked), but refusing here too means no code path can ever guess.
+    if (!uploadVertical) {
+      toast.error("Choose a business line before importing.")
+      if (fileInputRef.current) fileInputRef.current.value = ""
+      return
+    }
     setIsUploading(true)
     const formData = new FormData()
     formData.append("file", file)
@@ -3542,16 +3685,51 @@ export function LeadCommandDashboard() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`)
 
-      const summary = data.summary
       // The business line is named back to the operator on purpose: it is the
       // one thing about an upload that cannot be corrected by looking at the
       // data afterwards, so it is worth confirming out loud.
       const into = `into ${VERTICAL_LABELS[uploadVertical]}`
-      toast.success(
-        summary
-          ? `Uploaded ${into}: ${summary.valid ?? 0} leads added, ${summary.duplicate ?? 0} duplicates, ${summary.rejected ?? 0} rejected`
-          : `File uploaded ${into}`,
-      )
+
+      // n8n parses and inserts in the background and answers `202 accepted` with
+      // only a batch id, so the real counts have to be fetched. Without this the
+      // operator was told "File uploaded" whether every row landed or every row
+      // was skipped — indistinguishable, and the reason a client believed his
+      // imports were silently failing.
+      const summary = data.summary
+      const batchId = data.batch_id ?? data.batchId
+      let reported = false
+
+      if (!summary && batchId) {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 1200 : 1500))
+          try {
+            const s = await fetch(`/api/leads/upload/status?batchId=${encodeURIComponent(batchId)}`)
+            const status = await s.json().catch(() => ({}))
+            if (!s.ok || !status.ready) continue
+            if (status.nothingImported) {
+              // Loud on purpose. This is the exact case that used to pass as success.
+              toast.error(`Nothing was imported ${into} — ${status.message}.`, { duration: 10000 })
+            } else {
+              toast.success(`Imported ${into}: ${status.message}`, { duration: 8000 })
+            }
+            reported = true
+            break
+          } catch {
+            // keep polling; a transient failure here must not be read as success
+          }
+        }
+      }
+
+      if (!reported) {
+        if (summary) {
+          toast.success(
+            `Uploaded ${into}: ${summary.valid ?? 0} leads added, ${summary.duplicate ?? 0} duplicates, ${summary.rejected ?? 0} rejected`,
+          )
+        } else {
+          // Never claim rows landed when that was not confirmed.
+          toast.message(`File sent ${into}. Still processing — check the lead list in a moment.`)
+        }
+      }
       // The browser used to ALSO post the same file straight to a hard-coded n8n
       // cloud URL, which imported every row a second time and sent lead data to a
       // third party from the client. /api/leads/upload already forwards to n8n.
@@ -3699,6 +3877,7 @@ export function LeadCommandDashboard() {
             leadStats={leadStats}
             isLoading={leadsLoading}
             vertical={vertical}
+            onCallPlaced={refreshAll}
           />
         )
       case "Calls":
@@ -3905,6 +4084,13 @@ export function LeadCommandDashboard() {
               <Upload data-icon="inline-start" />
               <span className="hidden sm:inline">{isUploading ? "Uploading…" : "Import leads"}</span>
             </Button>
+            {/* Sits beside Import on purpose: these are the two ways a lead gets
+                into the system, and calling one person should not require
+                building a file first. */}
+            <Button variant="outline" size="sm" onClick={() => setQuickCallOpen(true)} className="px-2.5 sm:px-3">
+              <PhoneForwarded data-icon="inline-start" />
+              <span className="hidden sm:inline">Call one person</span>
+            </Button>
             <Button size="sm" onClick={() => setCampaignOpen(true)} className="px-2.5 sm:px-3">
               <Phone data-icon="inline-start" />
               <span className="hidden sm:inline">Start campaign</span>
@@ -4043,6 +4229,10 @@ export function LeadCommandDashboard() {
           and any "out of credits" toast, so it lives at the shell level. */}
       <TopUpDialog open={topUpOpen} onOpenChange={setTopUpOpen} />
 
+      {/* Call one person — no file, no campaign. Same dialling path as the Call
+          button on a lead row, so there is one place a manual call happens. */}
+      <QuickCallDialog open={quickCallOpen} onOpenChange={setQuickCallOpen} onPlaced={refreshAll} />
+
       {/* Import leads — business line first, file second. */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent>
@@ -4058,9 +4248,15 @@ export function LeadCommandDashboard() {
               <label className="text-sm font-medium" htmlFor="upload-vertical">
                 Business line
               </label>
-              <Select value={uploadVertical} onValueChange={(v) => setUploadVertical(v as Vertical)}>
+              <Select
+                value={uploadVertical ?? undefined}
+                onValueChange={(v) => setUploadVertical(v as Vertical)}
+              >
                 <SelectTrigger id="upload-vertical">
-                  <SelectValue />
+                  {/* No pre-selected value: this used to arrive already filled in
+                      with whatever business line was being browsed, which reads as
+                      "already decided" and gets clicked past. */}
+                  <SelectValue placeholder="Choose a business line…" />
                 </SelectTrigger>
                 <SelectContent>
                   {VERTICALS.map((v) => (
@@ -4074,6 +4270,16 @@ export function LeadCommandDashboard() {
                 This cannot be worked out from the file, so it has to be chosen here. Picking the
                 wrong one means these people are called by the wrong agent.
               </p>
+              {uploadVertical ? (
+                <p className="text-xs font-medium text-foreground">
+                  These leads will be imported into{" "}
+                  <span className={VERTICAL_STYLES[uploadVertical].color}>
+                    {VERTICAL_LABELS[uploadVertical]}
+                  </span>
+                  . The same person can also exist in another business line — that is not a
+                  duplicate, and it will import normally.
+                </p>
+              ) : null}
             </div>
             <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
               CSV, XLSX or XLS. Any column layout — the importer matches common headings for name,
@@ -4085,13 +4291,15 @@ export function LeadCommandDashboard() {
               Cancel
             </Button>
             <Button
-              disabled={isUploading}
+              // Locked until a business line is chosen — the import cannot fall
+              // back to a default, because a wrong default is invisible.
+              disabled={isUploading || !uploadVertical}
               onClick={() => {
                 setUploadOpen(false)
                 fileInputRef.current?.click()
               }}
             >
-              Choose file →
+              {uploadVertical ? `Choose file for ${VERTICAL_LABELS[uploadVertical]} →` : "Choose a business line first"}
             </Button>
           </DialogFooter>
         </DialogContent>

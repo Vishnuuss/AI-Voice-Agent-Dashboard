@@ -14,22 +14,10 @@ import {
   verticalFromParam,
   type Vertical,
 } from '@/lib/verticals';
+import { WORKFLOW_ENV_BY_VERTICAL } from '@/lib/workflow-routing';
 
-/**
- * Which Dograh agent to dial each business line with.
- *
- * Loan falls back to the original single DOGRAH_WORKFLOW_ID so the live loan
- * campaign keeps working unchanged through this transition. The other three
- * have NO fallback on purpose: an unset id must refuse the launch, never
- * quietly dial a real-estate list with the loan script. That failure would be
- * invisible from the dashboard and audible only to the customer.
- */
-const WORKFLOW_ENV_BY_VERTICAL: Record<Vertical, string | undefined> = {
-  loan: process.env.DOGRAH_WORKFLOW_ID_LOAN ?? process.env.DOGRAH_WORKFLOW_ID,
-  realestate: process.env.DOGRAH_WORKFLOW_ID_REALESTATE,
-  solar: process.env.DOGRAH_WORKFLOW_ID_SOLAR,
-  investing: process.env.DOGRAH_WORKFLOW_ID_INVESTING,
-};
+// Moved to lib/workflow-routing.ts so the manual single-call endpoint dials each
+// business line with exactly the same agent this does. Two copies would drift.
 
 /** Statuses that mean "a launch for this name is already in flight". */
 const IN_FLIGHT = ['pending', 'queued', 'running', 'paused'];
