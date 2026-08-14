@@ -8,6 +8,7 @@ import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing
 import { getBillingConfig, sweepUnbilledCalls } from '@/lib/billing';
 import { meterAllCampaigns, enrichUsageInfo } from '@/lib/billing-meter';
 import { enforceBalanceGuard } from '@/lib/billing-guard';
+import { purgeExpired } from '@/lib/trash';
 
 /**
  * Reconciles our database against Dograh, recovering anything a missed webhook lost.
@@ -160,11 +161,26 @@ async function handler(request: Request) {
       }
     }
 
+    // --- Recycle Bin retention ----------------------------------------------
+    // The 7-day window rides on this job rather than getting a schedule of its
+    // own: this already runs every ten minutes (vercel.json), and a second cron
+    // entry would be one more thing to configure correctly on every deploy.
+    //
+    // Non-fatal for the same reason billing is. If the trash tables do not exist
+    // yet — migration 008 not run — this logs and the reconcile keeps working.
+    let trashPurged = 0;
+    try {
+      trashPurged = await purgeExpired(supabase);
+    } catch (trashError: any) {
+      console.error('[cron:reconcile] trash purge failed', trashError?.message);
+    }
+
     return NextResponse.json({
       success: true,
       campaigns_checked: campaigns?.length ?? 0,
       ...totals,
       released_stuck_leads: releasedLeads,
+      trash_batches_purged: trashPurged,
       billing: billingReport,
     });
   } catch (error) {

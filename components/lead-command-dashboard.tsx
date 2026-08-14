@@ -65,6 +65,7 @@ import {
   X,
   Zap,
   Wallet,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts"
@@ -87,6 +88,9 @@ import { BsWealthLockupInline } from "@/components/brand/bs-wealth-mark"
 import { IntroSequence } from "@/components/motion/intro-sequence"
 import { Skeleton, StatSkeletonRow } from "@/components/motion/primitives"
 import { CallLeadButton, QuickCallDialog, callBlockedReason } from "@/components/manual-call"
+import { BulkDeleteBar, RowCheckbox, useRowSelection } from "@/components/bulk-delete"
+import { RecycleBinPage } from "@/components/recycle-bin"
+import { FeedbackDialog } from "@/components/feedback-dialog"
 
 // ─── CONSTANTS & HELPERS ───────────────────────────────
 
@@ -407,11 +411,39 @@ function EmptyRow({ colSpan, children }: { colSpan: number; children: React.Reac
  * switch, not the individual lead: a table has one set of headers, so the
  * columns can only match the line being viewed.
  */
-function LeadRow({ lead, onSelect, columns, solar = false, onCallPlaced }: { lead: any; onSelect: (lead: any) => void; columns: "compact" | "full"; solar?: boolean; onCallPlaced?: () => void }) {
+function LeadRow({
+  lead,
+  onSelect,
+  columns,
+  solar = false,
+  onCallPlaced,
+  selected,
+  onToggleSelect,
+}: {
+  lead: any
+  onSelect: (lead: any) => void
+  columns: "compact" | "full"
+  solar?: boolean
+  onCallPlaced?: () => void
+  /** Selection is opt-in: passing onToggleSelect adds the tick column. The
+   *  Overview and Follow-ups tables share this row and have no bulk delete, so
+   *  they simply do not pass it and their column counts stay as they were. */
+  selected?: boolean
+  onToggleSelect?: (id: string) => void
+}) {
   const score = lead.score ?? 0
   const scoreData = getScoreLabel(score)
   return (
     <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => onSelect(lead)}>
+      {onToggleSelect && (
+        <TableCell className="w-10">
+          <RowCheckbox
+            checked={!!selected}
+            onChange={() => onToggleSelect(lead.id)}
+            label={`Select ${lead.name || lead.phone}`}
+          />
+        </TableCell>
+      )}
       <TableCell>
         <div className="flex items-center gap-3">
           <Avatar className="size-8">
@@ -865,6 +897,8 @@ function LeadsPage({
   isLoading,
   vertical,
   onCallPlaced,
+  deleteFilters,
+  onDeleted,
 }: {
   leads: any[]
   onSelectLead: (lead: any, callId?: string | null) => void
@@ -878,11 +912,27 @@ function LeadsPage({
   isLoading: boolean
   vertical: VerticalFilter
   onCallPlaced?: () => void
+  /** Exactly the filter the list was fetched with, in the API's parameter
+   *  names, so the delete acts on the same set the table is showing. */
+  deleteFilters: Record<string, any>
+  onDeleted: () => void
 }) {
   // On the Solar view the table shows the solar answers instead of the loan
   // ones. Only when Solar is actually selected: under "All" the table mixes
   // business lines and one set of headers cannot describe all four.
   const solar = vertical === "solar"
+
+  // Ticks are dropped whenever the filter or the business line changes: a row
+  // ticked under one filter is not necessarily visible under the next, and
+  // deleting something the client can no longer see is the failure this feature
+  // must never have.
+  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(
+    `${statusFilter}|${vertical}|${JSON.stringify(deleteFilters)}`,
+  )
+  const pageIds = leads.map((lead) => lead.id)
+  const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.includes(id))
+  const someOnPage = pageIds.some((id) => selected.includes(id))
+
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -936,11 +986,29 @@ function LeadsPage({
         </Card>
       </div>
 
+      <BulkDeleteBar
+        entity="leads"
+        selected={selected}
+        onClearSelection={clear}
+        filters={deleteFilters}
+        filterIsActive={statusFilter !== "All" || vertical !== "all"}
+        matchingCount={totalCount}
+        onDeleted={onDeleted}
+      />
+
       <Card className="min-w-0">
         <CardContent className="overflow-x-auto p-0">
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <RowCheckbox
+                    checked={allOnPage}
+                    indeterminate={someOnPage}
+                    onChange={(checked) => setPageSelection(pageIds, checked)}
+                    label="Select every lead on this page"
+                  />
+                </TableHead>
                 <TableHead>Lead</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Location</TableHead>
@@ -964,12 +1032,21 @@ function LeadsPage({
             </TableHeader>
             <TableBody className="stagger-rows">
               {leads.length === 0 ? (
-                <EmptyRow colSpan={8}>
+                <EmptyRow colSpan={9}>
                   {isLoading ? "Loading leads…" : "No leads found. Upload a CSV to import leads."}
                 </EmptyRow>
               ) : (
                 leads.map((lead) => (
-                  <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="full" solar={solar} onCallPlaced={onCallPlaced} />
+                  <LeadRow
+                    key={lead.id}
+                    lead={lead}
+                    onSelect={onSelectLead}
+                    columns="full"
+                    solar={solar}
+                    onCallPlaced={onCallPlaced}
+                    selected={selected.includes(lead.id)}
+                    onToggleSelect={toggle}
+                  />
                 ))
               )}
             </TableBody>
@@ -1001,6 +1078,25 @@ function CallsPage({
   useEffect(() => {
     setPage(1)
   }, [callFilter, vertical])
+
+  // The tabs group several outcomes under one label ("No answer" covers busy and
+  // voicemail too). The delete endpoint takes the raw outcomes, so the grouping
+  // is expanded here rather than re-implemented server-side — one definition of
+  // what "No answer" means, shared by the list and the delete.
+  const CALL_FILTER_OUTCOMES: Record<string, string> = {
+    connected: "completed",
+    missed: "no_answer,busy,voicemail",
+    failed: "failed,cancelled",
+  }
+  const deleteFilters = {
+    outcome: CALL_FILTER_OUTCOMES[callFilter],
+    vertical: vertical === "all" ? undefined : vertical,
+  }
+
+  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(`${callFilter}|${vertical}`)
+  const pageIds = calls.map((call: any) => call.id)
+  const allOnPage = pageIds.length > 0 && pageIds.every((id: string) => selected.includes(id))
+  const someOnPage = pageIds.some((id: string) => selected.includes(id))
 
   return (
     <>
@@ -1064,11 +1160,29 @@ function CallsPage({
         </Card>
       </div>
 
+      <BulkDeleteBar
+        entity="calls"
+        selected={selected}
+        onClearSelection={clear}
+        filters={deleteFilters}
+        filterIsActive={callFilter !== "all" || vertical !== "all"}
+        matchingCount={totalCount}
+        onDeleted={refresh}
+      />
+
       <Card className="min-w-0">
         <CardContent className="overflow-x-auto p-0">
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <RowCheckbox
+                    checked={allOnPage}
+                    indeterminate={someOnPage}
+                    onChange={(checked) => setPageSelection(pageIds, checked)}
+                    label="Select every call on this page"
+                  />
+                </TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Lead</TableHead>
                 <TableHead>Outcome</TableHead>
@@ -1080,7 +1194,7 @@ function CallsPage({
             </TableHeader>
             <TableBody className="stagger-rows">
               {calls.length === 0 ? (
-                <EmptyRow colSpan={7}>
+                <EmptyRow colSpan={8}>
                   {isLoading ? "Loading calls…" : "No calls recorded yet. Launch a campaign to start calling."}
                 </EmptyRow>
               ) : (
@@ -1090,6 +1204,13 @@ function CallsPage({
                     className={cn(call.leads && "cursor-pointer hover:bg-muted/50")}
                     onClick={() => call.leads && onSelectLead(call.leads, call.id)}
                   >
+                    <TableCell className="w-10">
+                      <RowCheckbox
+                        checked={selected.includes(call.id)}
+                        onChange={() => toggle(call.id)}
+                        label={`Select call to ${call.leads?.name || call.leads?.phone || "unknown"}`}
+                      />
+                    </TableCell>
                     <TableCell>
                       <CallOutcomeIcon outcome={call.outcome} />
                     </TableCell>
@@ -1280,6 +1401,17 @@ function CampaignsPage({
   const activeCampaigns = campaignsData.filter((c: any) => c.status === "running" || c.status === "active").length
   const totalTargeted = campaignsData.reduce((sum: number, c: any) => sum + (c.actual_count || c.requested_count || 0), 0)
 
+  // Only finished campaigns can be ticked. A live campaign's row is the only
+  // handle the system has on the Dograh campaign it started — the server refuses
+  // to delete one either way, and offering a tick that silently does nothing is
+  // worse than not offering it.
+  const DELETABLE = ["completed", "failed", "cancelled"]
+  const deletableCampaigns = campaignsData.filter((c: any) => DELETABLE.includes(c.status))
+  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(campaignsData.length)
+  const deletableIds = deletableCampaigns.map((c: any) => c.id)
+  const allSelected = deletableIds.length > 0 && deletableIds.every((id: string) => selected.includes(id))
+  const someSelected = deletableIds.some((id: string) => selected.includes(id))
+
   return (
     <>
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -1326,6 +1458,29 @@ function CampaignsPage({
         </Card>
       </div>
 
+      {deletableCampaigns.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+            <RowCheckbox
+              checked={allSelected}
+              indeterminate={someSelected}
+              onChange={(checked) => setPageSelection(deletableIds, checked)}
+              label="Select every finished campaign"
+            />
+            Select all {deletableCampaigns.length} finished campaign{deletableCampaigns.length === 1 ? "" : "s"}
+          </label>
+          <BulkDeleteBar
+            entity="campaigns"
+            selected={selected}
+            onClearSelection={clear}
+            filters={{ status: "completed,failed,cancelled" }}
+            filterIsActive={false}
+            matchingCount={deletableCampaigns.length}
+            onDeleted={refreshCampaigns}
+          />
+        </div>
+      )}
+
       <div className="stagger-rows flex flex-col gap-4">
         {campaignsData.length === 0 ? (
           <Card>
@@ -1354,6 +1509,14 @@ function CampaignsPage({
                 <CardContent className="p-5">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-4">
+                      {/* Rendered only for finished campaigns — see DELETABLE above. */}
+                      {DELETABLE.includes(status) && (
+                        <RowCheckbox
+                          checked={selected.includes(campaign.id)}
+                          onChange={() => toggle(campaign.id)}
+                          label={`Select campaign ${name}`}
+                        />
+                      )}
                       <div className="flex size-10 items-center justify-center rounded-lg bg-secondary">
                         <Megaphone className="size-5 text-muted-foreground" />
                       </div>
@@ -3408,6 +3571,10 @@ const systemNavItems = [
   // check the balance, and hiding that two clicks deep behind "Reports"
   // made it the hardest number on the site to find.
   { label: "Usage & billing", icon: Wallet },
+  // Sits beside Settings rather than under it: this is where deleted leads and
+  // call history go, and a client who has just deleted the wrong 4,000 rows
+  // needs to find it immediately, not two clicks deep.
+  { label: "Recycle bin", icon: Trash2 },
   { label: "Settings", icon: Settings },
 ] as const
 
@@ -3506,6 +3673,7 @@ export function LeadCommandDashboard() {
   const [uploadVertical, setUploadVertical] = useState<Vertical | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [quickCallOpen, setQuickCallOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   useEffect(() => {
     const saved = window.localStorage.getItem(VERTICAL_STORAGE_KEY)
@@ -3534,6 +3702,18 @@ export function LeadCommandDashboard() {
   const leadFilter = useMemo<LeadQuery>(
     () => LEAD_FILTERS.find((option) => option.label === statusFilter)?.query ?? {},
     [statusFilter],
+  )
+
+  // The same filter the list is fetched with, handed to the bulk delete so the
+  // count in the confirmation dialog and the rows that actually go are one set.
+  // `undefined` values are stripped by the delete route's body parser.
+  const leadDeleteFilters = useMemo(
+    () => ({
+      ...leadFilter,
+      search: debouncedQuery || undefined,
+      vertical: vertical === "all" ? undefined : vertical,
+    }),
+    [leadFilter, debouncedQuery, vertical],
   )
 
   const {
@@ -3878,6 +4058,8 @@ export function LeadCommandDashboard() {
             isLoading={leadsLoading}
             vertical={vertical}
             onCallPlaced={refreshAll}
+            deleteFilters={leadDeleteFilters}
+            onDeleted={refreshAll}
           />
         )
       case "Calls":
@@ -3906,6 +4088,8 @@ export function LeadCommandDashboard() {
         return <AIAgentPage leadStats={leadStats} callStats={callStats} vertical={vertical} />
       case "Usage & billing":
         return <UsageBillingPage onTopUp={() => setTopUpOpen(true)} />
+      case "Recycle bin":
+        return <RecycleBinPage />
       case "Settings":
         return <SettingsPage health={health} onLogout={handleLogout} />
       default:
@@ -4098,6 +4282,19 @@ export function LeadCommandDashboard() {
             <Button variant="ghost" size="icon" onClick={refreshAll} aria-label="Refresh data" className="hidden sm:inline-flex">
               <RefreshCw className={cn(leadsLoading && "animate-spin")} />
             </Button>
+            {/* Ghost, beside the notification bell rather than in the primary
+                cluster: asking for feedback should be findable at any moment
+                without competing with the actions that actually run the
+                business. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setFeedbackOpen(true)}
+              className="px-2.5 sm:px-3"
+            >
+              <MessageSquare data-icon="inline-start" />
+              <span className="hidden sm:inline">Feedback</span>
+            </Button>
             <div className="relative">
               <Button variant="ghost" size="icon" onClick={() => setNotifOpen(true)}>
                 <Bell />
@@ -4232,6 +4429,8 @@ export function LeadCommandDashboard() {
       {/* Call one person — no file, no campaign. Same dialling path as the Call
           button on a lead row, so there is one place a manual call happens. */}
       <QuickCallDialog open={quickCallOpen} onOpenChange={setQuickCallOpen} onPlaced={refreshAll} />
+
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
 
       {/* Import leads — business line first, file second. */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>

@@ -34,6 +34,7 @@ export function OperatorConsole() {
   const [economics, setEconomics] = useState<any>(null);
   const [integrity, setIntegrity] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
+  const [feedback, setFeedback] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -52,6 +53,16 @@ export function OperatorConsole() {
       setEconomics(e);
       setIntegrity(i);
       setUsers(u.users ?? []);
+
+      // Deliberately outside the Promise.all above: feedback is the newest table
+      // and the only one that can be missing on a deployment where migration 008
+      // has not been run yet. Failing it inside the batch would take the whole
+      // console — money, margin, logins — down with it.
+      try {
+        setFeedback(await opFetch('/api/operator/feedback'));
+      } catch {
+        setFeedback(null);
+      }
     } catch (err: any) {
       toast.error('Could not load', { description: err?.message });
     } finally {
@@ -147,6 +158,9 @@ export function OperatorConsole() {
           <TabsTrigger value="margin">Margin</TabsTrigger>
           <TabsTrigger value="settings">Pricing</TabsTrigger>
           <TabsTrigger value="users">Logins</TabsTrigger>
+          <TabsTrigger value="feedback">
+            Feedback{feedback?.summary?.total ? ` (${feedback.summary.total})` : ''}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -250,6 +264,7 @@ export function OperatorConsole() {
         {tab === 'settings' && account && <PricingPanel account={account} onSaved={load} />}
 
         {tab === 'users' && <UsersPanel users={users} onChanged={load} />}
+        {tab === 'feedback' && <FeedbackPanel data={feedback} />}
       </div>
     </div>
   );
@@ -924,6 +939,127 @@ function UsersPanel({ users, onChanged }: { users: any[]; onChanged: () => void 
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * What the client actually thinks, in their own words.
+ *
+ * Read-only and operator-only: /api/feedback is write-only from the dashboard
+ * side, so the client never sees this list. That is the point — a client who can
+ * see their own past complaints on a screen their staff also use will stop
+ * writing honest ones.
+ */
+function FeedbackPanel({ data }: { data: any }) {
+  if (!data) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+          No feedback yet — or the <code>feedback</code> table is missing. Run
+          <code className="mx-1">scripts/008_trash_and_feedback.sql</code> in Supabase if this is a fresh deployment.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const s = data.summary ?? {};
+  const rows: any[] = data.submissions ?? [];
+
+  const CHANGE_LABELS: Record<string, string> = {
+    much_better: 'Improved a lot',
+    better: 'Improved a little',
+    same: 'About the same',
+    worse: 'Got worse',
+    too_early: 'Too early to say',
+  };
+  const HOURS_LABELS: Record<string, string> = {
+    none: 'None yet',
+    under_5: 'Under 5h',
+    '5_to_15': '5–15h',
+    over_15: '15h+',
+  };
+
+  const tiles = [
+    { label: 'Submissions', value: s.total ?? 0 },
+    { label: 'Dashboard', value: s.dashboard != null ? `${s.dashboard} / 5` : '—' },
+    { label: 'Voice quality', value: s.voice != null ? `${s.voice} / 5` : '—' },
+    { label: 'Understanding', value: s.understanding != null ? `${s.understanding} / 5` : '—' },
+    // NPS is meaningless on two responses, so the sample size travels with it.
+    { label: 'NPS', value: s.nps != null ? `${s.nps} (${s.npsResponses})` : '—' },
+    { label: 'Say qualification improved', value: s.improvedCount ?? 0 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
+        {tiles.map((tile) => (
+          <Card key={tile.label}>
+            <CardContent className="p-4">
+              <p className="text-2xl font-semibold">{tile.value}</p>
+              <p className="text-xs text-muted-foreground">{tile.label}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Every submission</CardTitle>
+          <CardDescription>Newest first. The client cannot see this list.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {rows.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Nobody has submitted feedback yet.</p>
+          ) : (
+            <div className="space-y-4">
+              {rows.map((row) => (
+                <div key={row.id} className="rounded-lg border p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="capitalize">{row.vertical}</Badge>
+                    {row.qualification_change && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'border-transparent',
+                          row.qualification_change === 'worse'
+                            ? 'bg-destructive/10 text-destructive'
+                            : row.qualification_change === 'much_better' || row.qualification_change === 'better'
+                              ? 'bg-emerald-500/10 text-emerald-600'
+                              : 'bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {CHANGE_LABELS[row.qualification_change] ?? row.qualification_change}
+                      </Badge>
+                    )}
+                    <span className="ms-auto text-xs text-muted-foreground">
+                      {new Date(row.created_at).toLocaleString('en-IN')}
+                      {row.submitted_by ? ` · ${row.submitted_by}` : ''}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+                    <span>Dashboard {row.dashboard_rating ?? '—'}/5</span>
+                    <span>Voice {row.voice_rating ?? '—'}/5</span>
+                    <span>Understanding {row.understanding_rating ?? '—'}/5</span>
+                    {row.recommend_score != null && <span>Would recommend {row.recommend_score}/10</span>}
+                    {row.hours_saved && <span>Saves {HOURS_LABELS[row.hours_saved] ?? row.hours_saved}/week</span>}
+                    {(row.qualified_before_week != null || row.qualified_after_week != null) && (
+                      <span>
+                        Qualified/week {row.qualified_before_week ?? '—'} → {row.qualified_after_week ?? '—'}
+                      </span>
+                    )}
+                  </div>
+
+                  {row.improvements && (
+                    <p className="mt-3 whitespace-pre-wrap border-l-2 border-border pl-3 text-sm">{row.improvements}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

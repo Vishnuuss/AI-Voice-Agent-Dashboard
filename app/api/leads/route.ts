@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
-import { applyVerticalFilter, verticalFromParam } from '@/lib/verticals';
+import { applyLeadFilters, parseLeadFilters } from '@/lib/lead-filter';
 
 /** Columns a client is allowed to sort by - anything else is a PostgREST error. */
 const SORTABLE = new Set([
@@ -16,21 +16,18 @@ const SORTABLE = new Set([
 const MAX_LIMIT = 200;
 
 /**
- * PostgREST's `.or()` takes a filter expression as a STRING, so commas, parentheses
- * and dots in user input change its meaning. Strip them rather than trusting the
- * search box.
+ * The lead list.
+ *
+ * Filter parsing and application moved to lib/lead-filter.ts so that the
+ * bulk-delete route runs the EXACT same filter. The delete dialog quotes a count
+ * that comes from this endpoint's `totalCount`, and the two must never be able
+ * to disagree — see the note at the top of that file.
  */
-function sanitiseSearch(raw: string): string {
-  return raw.replace(/[,()*%\\"']/g, ' ').trim().slice(0, 80);
-}
-
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get('search') || '';
-    const status = searchParams.get('status') || '';
-    const qualification = searchParams.get('qualification') || '';
-    const followUp = searchParams.get('followUp');
+    const filters = parseLeadFilters(searchParams);
+
     const page = Math.max(parseInt(searchParams.get('page') || '1', 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10) || 20, 1), MAX_LIMIT);
     const requestedSort = searchParams.get('sort') || 'created_at';
@@ -39,45 +36,7 @@ export async function GET(request: Request) {
 
     const supabase = createServerClient();
 
-    let query = supabase.from('leads').select('*', { count: 'exact' });
-
-    // The dashboard's header switch. "all" (or absent) means no filter, so leads
-    // written before the vertical column existed still appear.
-    query = applyVerticalFilter(query, verticalFromParam(searchParams.get('vertical')));
-
-    const term = sanitiseSearch(search);
-    if (term) {
-      query = query.or(
-        `name.ilike.%${term}%,phone.ilike.%${term}%,city.ilike.%${term}%,email.ilike.%${term}%`,
-      );
-    }
-
-    // `status` accepts a comma-separated list so the UI can ask for
-    // "retry_pending,no_answer" in one call.
-    if (status) {
-      const values = status
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (values.length === 1) query = query.eq('status', values[0]);
-      else if (values.length > 1) query = query.in('status', values);
-    }
-
-    if (qualification) query = query.eq('qualification', qualification);
-
-    // How the LAST call ended, which is a different question from what state the
-    // lead is in. A busy number is status `retry_pending` with call_outcome
-    // `busy`, so filtering on status alone could never produce a list of busy or
-    // voicemail numbers.
-    const outcome = searchParams.get('outcome') || '';
-    if (outcome) {
-      const values = outcome.split(',').map((s) => s.trim()).filter(Boolean);
-      if (values.length === 1) query = query.eq('call_outcome', values[0]);
-      else if (values.length > 1) query = query.in('call_outcome', values);
-    }
-
-    // Drives the Follow-ups page, which previously rendered a hard-coded empty list.
-    if (followUp === 'true') query = query.not('follow_up_date', 'is', null);
+    let query = applyLeadFilters(supabase.from('leads').select('*', { count: 'exact' }), filters);
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
