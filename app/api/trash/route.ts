@@ -45,9 +45,44 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Failed to load the Recycle Bin.' }, { status: 500 });
     }
 
+    const batches = data ?? [];
+
+    /*
+     * Attach the names of the people in each lead batch.
+     *
+     * Without this the bin's only description of a delete is its filter_label,
+     * which for the commonest case — ticking rows by hand — reads "1 hand-picked
+     * lead". That is a description of HOW it was deleted, not WHAT was deleted,
+     * and it is unanswerable: the client cannot tell whether the thing they are
+     * about to restore or wipe is the customer they care about.
+     *
+     * One extra query for the whole page, not one per row. Only lead batches:
+     * call_logs_trash stores no name, and a campaign batch's label is already
+     * the campaign's own name.
+     */
+    const leadBatchIds = batches.filter((b) => b.entity === 'lead').map((b) => b.id);
+    const samples = new Map<string, { names: string[]; total: number }>();
+
+    if (leadBatchIds.length) {
+      const { data: rows } = await supabase
+        .from('leads_trash')
+        .select('batch_id, name, phone')
+        .in('batch_id', leadBatchIds)
+        // Bounded: enough to name a few per batch without reading a 20,000-row
+        // delete back out of the archive just to render one line.
+        .limit(400);
+
+      for (const row of rows ?? []) {
+        const entry = samples.get(row.batch_id) ?? { names: [], total: 0 };
+        entry.total += 1;
+        if (entry.names.length < 3) entry.names.push(row.name || row.phone || 'Unnamed');
+        samples.set(row.batch_id, entry);
+      }
+    }
+
     const total = count || 0;
     return NextResponse.json({
-      batches: data ?? [],
+      batches: batches.map((b) => ({ ...b, sample: samples.get(b.id)?.names ?? null })),
       retentionDays: RETENTION_DAYS,
       totalCount: total,
       totalPages: total ? Math.ceil(total / limit) : 0,

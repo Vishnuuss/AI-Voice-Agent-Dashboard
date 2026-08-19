@@ -510,20 +510,84 @@ export interface RestoreResult {
  * only on the chunks that actually conflict, and it means a restore always
  * brings back everything it possibly can.
  */
-async function insertTolerant(supabase: Db, table: string, rows: any[]): Promise<{ ok: number; failed: number }> {
-  if (!rows.length) return { ok: 0, failed: 0 };
+/**
+ * Columns the DATABASE computes, which therefore must never be written back.
+ *
+ * `leads.lead_temperature` is `GENERATED ALWAYS`. The archive stores the whole
+ * row as jsonb — correctly, so a restore survives the table gaining columns —
+ * but that whole row includes the generated one, and Postgres rejects any
+ * insert that names it: 428C9 "cannot insert a non-DEFAULT value".
+ *
+ * This made EVERY lead restore fail, every time, and the failure was invisible:
+ * insertTolerant counted the error and threw the message away, and restoreBatch
+ * then stamped the batch as restored regardless. The client pressed Restore, saw
+ * "Restored", and the lead did not come back. purgeExpired deletes restored
+ * batches, so the archived copy was next in line to be swept — the lead would
+ * have been destroyed by the feature whose whole purpose is not destroying it.
+ *
+ * Detected against the live schema: `leads.lead_temperature` is the only one.
+ * `stripGenerated` also self-heals if a future migration adds another, because
+ * insertTolerant retries on 428C9 with the offending column removed.
+ */
+const GENERATED_COLUMNS: Record<string, string[]> = {
+  leads: ['lead_temperature'],
+};
 
-  const { error } = await supabase.from(table).insert(rows);
-  if (!error) return { ok: rows.length, failed: 0 };
+function stripGenerated(table: string, row: any): any {
+  const generated = GENERATED_COLUMNS[table];
+  if (!generated?.length) return row;
+  const copy = { ...row };
+  for (const column of generated) delete copy[column];
+  return copy;
+}
 
+/** The column named in a Postgres 428C9 "is a generated column" error. */
+function generatedColumnFromError(message: string | undefined): string | null {
+  const match = message?.match(/column "([^"]+)" is a generated column/i)
+    ?? message?.match(/cannot insert a non-DEFAULT value into column "([^"]+)"/i);
+  return match?.[1] ?? null;
+}
+
+async function insertTolerant(
+  supabase: Db,
+  table: string,
+  rows: any[],
+): Promise<{ ok: number; failed: number; error: string | null }> {
+  if (!rows.length) return { ok: 0, failed: 0, error: null };
+
+  const prepared = rows.map((r) => stripGenerated(table, r));
+
+  const { error } = await supabase.from(table).insert(prepared);
+  if (!error) return { ok: prepared.length, failed: 0, error: null };
+
+  // A generated column added since this constant was written: drop it and retry
+  // the whole chunk once, rather than losing every row to a schema change.
+  const generated = generatedColumnFromError(error.message);
+  if (generated) {
+    const retried = prepared.map((r) => {
+      const copy = { ...r };
+      delete copy[generated];
+      return copy;
+    });
+    const { error: retryError } = await supabase.from(table).insert(retried);
+    if (!retryError) return { ok: retried.length, failed: 0, error: null };
+  }
+
+  // Row by row, so one bad row does not cost the rest of the chunk. The first
+  // real error is KEPT and reported — swallowing it is what hid this bug.
   let ok = 0;
   let failed = 0;
-  for (const row of rows) {
+  let firstError: string | null = null;
+  for (const row of prepared) {
     const { error: rowError } = await supabase.from(table).insert(row);
-    if (rowError) failed += 1;
-    else ok += 1;
+    if (rowError) {
+      failed += 1;
+      firstError = firstError ?? rowError.message;
+    } else {
+      ok += 1;
+    }
   }
-  return { ok, failed };
+  return { ok, failed, error: firstError };
 }
 
 /** True if a row with this id currently exists - used to avoid restoring a
@@ -551,6 +615,8 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
   let restoredCalls = 0;
   let skipped = 0;
   let skippedReason: string | null = null;
+  /** The first real database error, so a failure can say what went wrong. */
+  let insertError: string | null = null;
 
   if (batch.entity === 'campaign') {
     const { data: rows } = await supabase.from('campaign_runs_trash').select('*').eq('batch_id', batchId);
@@ -559,6 +625,7 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
       const res = await insertTolerant(supabase, 'campaign_runs', chunk.map((r: any) => r.row_data));
       restored += res.ok;
       skipped += res.failed;
+      if (res.error) insertError = insertError ?? res.error;
 
       // Reattach the leads and calls that were cut loose by ON DELETE SET NULL.
       for (const r of chunk) {
@@ -598,8 +665,17 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
       const res = await insertTolerant(supabase, 'leads', chunk);
       restored += res.ok;
       skipped += res.failed;
+      if (res.error) insertError = insertError ?? res.error;
     }
-    if (skipped) skippedReason = 'the same phone number has been re-uploaded on that business line since';
+    // The old wording asserted a duplicate phone number as the cause without
+    // checking. It was wrong for the failure that actually happened for months
+    // — a generated column — and sent the reader looking in the wrong place.
+    // Report a duplicate only when the database says duplicate.
+    if (skipped) {
+      skippedReason = insertError?.includes('duplicate key')
+        ? 'the same phone number has been re-uploaded on that business line since'
+        : insertError ?? 'the database refused the row';
+    }
   }
 
   // Call logs come last in every case: `call_logs.lead_id` points at `leads`, so
@@ -626,6 +702,7 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
       const res = await insertTolerant(supabase, 'call_logs', chunk);
       restoredCalls += res.ok;
       skipped += res.failed;
+      if (res.error) insertError = insertError ?? res.error;
     }
 
     if (orphaned) {
@@ -633,6 +710,22 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
       skippedReason = skippedReason ?? 'their lead was permanently deleted';
     }
     if (batch.entity === 'call_log') restored = restoredCalls;
+  }
+
+  // ONLY stamp the batch restored if something actually came back.
+  //
+  // This used to run unconditionally. Combined with insertTolerant swallowing
+  // its errors it produced the worst failure this feature can have: the bin
+  // said "Restored", the rows were still archived and not live, and
+  // purgeExpired — which deletes restored batches — was then free to wipe the
+  // only remaining copy. A restore that restored nothing is a FAILURE, and it
+  // now says so and leaves the batch exactly where it is, still recoverable.
+  if (restored === 0 && restoredCalls === 0) {
+    throw new Error(
+      skippedReason
+        ? `Nothing could be restored: ${skippedReason}. It is still in the Recycle bin.`
+        : 'Nothing could be restored. It is still in the Recycle bin, so nothing has been lost.',
+    );
   }
 
   await supabase.from('trash_batches').update({ restored_at: new Date().toISOString() }).eq('id', batchId);

@@ -1443,7 +1443,7 @@ function CallsPage({
             reading them as one run of eight buttons is what made this page feel
             like a wall. */}
         <div className="flex flex-col gap-2">
-          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0 md:pb-0">
+          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:overflow-visible md:px-0 md:pb-0">
             <Tabs value={callFilter} onValueChange={setCallFilter}>
               <TabsList className="w-max">
                 <TabsTrigger value="all">All</TabsTrigger>

@@ -29,6 +29,24 @@ interface TrashBatch {
   created_at: string
   purge_after: string
   restored_at: string | null
+  /** Up to three names from a lead batch, so a row can say WHO. */
+  sample?: string[] | null
+}
+
+/**
+ * What a row actually says, in the client's words.
+ *
+ * The server's `filter_label` describes how the delete was MADE ("1 hand-picked
+ * lead"), which tells the reader nothing about what is in it. When the API
+ * could name the people, name them.
+ */
+function describeBatch(batch: TrashBatch): string {
+  if (batch.sample?.length) {
+    const shown = batch.sample.join(", ")
+    const rest = batch.row_count - batch.sample.length
+    return rest > 0 ? `${shown} and ${rest.toLocaleString("en-IN")} more` : shown
+  }
+  return batch.filter_label
 }
 
 const ENTITY_META = {
@@ -116,7 +134,14 @@ export function RecycleBinPage() {
   }
 
   async function purge(batch: TrashBatch) {
-    if (!window.confirm(`Permanently delete ${batch.row_count.toLocaleString("en-IN")} rows? This cannot be undone.`)) return
+    // Two different actions wearing one label. On a batch that was PUT BACK, the
+    // live rows are already in the client's list and this only discards the
+    // leftover archived copy — warning them about permanent data loss there is
+    // simply false, and false alarms are how real ones stop being read.
+    const message = batch.restored_at
+      ? "Remove this entry from the Recycle bin?\n\nThe records themselves were already put back and are not affected."
+      : `Permanently delete ${batch.row_count.toLocaleString("en-IN")} rows? This cannot be undone.`
+    if (!window.confirm(message)) return
     setBusyId(batch.id)
     try {
       const res = await fetch(`/api/trash/${batch.id}`, { method: "DELETE" })
@@ -125,7 +150,7 @@ export function RecycleBinPage() {
         toast.error(data.error || "Could not empty that entry.")
         return
       }
-      toast.success("Permanently deleted.")
+      toast.success(batch.restored_at ? "Entry removed from the bin." : "Permanently deleted.")
       load()
     } finally {
       setBusyId(null)
@@ -159,7 +184,9 @@ export function RecycleBinPage() {
             390px phone, which pushed the WHOLE PAGE into a horizontal scroll.
             Two rows that each scroll on their own instead. */}
         <div className="flex flex-col gap-2">
-          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0 md:pb-0">
+          {/* overflow-visible above md, or the scroll container keeps a
+              scrollbar gutter beside the tabs on a desktop that has room. */}
+          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:overflow-visible md:px-0 md:pb-0">
             <Tabs value={filter} onValueChange={setFilter}>
               <TabsList className="w-max">
                 <TabsTrigger value="all">All</TabsTrigger>
@@ -215,19 +242,30 @@ export function RecycleBinPage() {
                     <div className="flex items-start gap-3">
                       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
-                        <p className="font-medium">{batch.filter_label}</p>
-                        {batch.cascaded_count > 0 && (
-                          <p className="text-xs text-muted-foreground">
-                            including {batch.cascaded_count.toLocaleString("en-IN")} call logs
-                          </p>
-                        )}
+                        <p className="font-medium">{describeBatch(batch)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {batch.row_count.toLocaleString("en-IN")} {meta?.label.toLowerCase() ?? "rows"}
+                          {batch.cascaded_count > 0
+                            ? ` · ${batch.cascaded_count.toLocaleString("en-IN")} call logs went with them`
+                            : ""}
+                        </p>
                       </div>
                       {batch.restored_at ? (
                         <Badge variant="outline" className="border-transparent bg-emerald-500/10 text-emerald-600">
-                          Restored
+                          Put back
                         </Badge>
                       ) : null}
                     </div>
+
+                    {/* Said outright. A restored row that still sits in a list
+                        headed "Recycle bin" reads as deleted, and the client has
+                        no way to tell that the data is already back. */}
+                    {batch.restored_at && (
+                      <p className="text-xs text-muted-foreground">
+                        Already back in your {meta?.label.toLowerCase() ?? "records"} — nothing here is deleted.
+                        This is just the leftover copy.
+                      </p>
+                    )}
 
                     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span className="font-mono">{batch.row_count.toLocaleString("en-IN")} rows</span>
@@ -251,7 +289,7 @@ export function RecycleBinPage() {
                         onClick={() => purge(batch)}
                       >
                         <Trash2 data-icon="inline-start" />
-                        Delete forever
+                        {batch.restored_at ? "Remove this entry" : "Delete forever"}
                       </Button>
                     </div>
                   </div>
@@ -271,7 +309,9 @@ export function RecycleBinPage() {
                 <TableHead>Rows</TableHead>
                 <TableHead>Deleted</TableHead>
                 <TableHead>By</TableHead>
-                <TableHead>Kept until</TableHead>
+                {/* Was "Kept until", which this column contradicted the moment a
+                    row was restored — it then showed a status badge, not a date. */}
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -291,13 +331,14 @@ export function RecycleBinPage() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Icon className="size-4 shrink-0 text-muted-foreground" />
-                          <div>
-                            <p className="font-medium">{batch.filter_label}</p>
-                            {batch.cascaded_count > 0 && (
-                              <p className="text-xs text-muted-foreground">
-                                including {batch.cascaded_count.toLocaleString("en-IN")} call logs
-                              </p>
-                            )}
+                          <div className="min-w-0">
+                            <p className="font-medium">{describeBatch(batch)}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {batch.sample?.length ? `${batch.filter_label}` : meta?.label}
+                              {batch.cascaded_count > 0
+                                ? ` · ${batch.cascaded_count.toLocaleString("en-IN")} call logs went with them`
+                                : ""}
+                            </p>
                           </div>
                         </div>
                       </TableCell>
@@ -306,9 +347,17 @@ export function RecycleBinPage() {
                       <TableCell className="text-sm text-muted-foreground">{batch.deleted_by || "—"}</TableCell>
                       <TableCell>
                         {batch.restored_at ? (
-                          <Badge variant="outline" className="border-transparent bg-emerald-500/10 text-emerald-600">
-                            Restored
-                          </Badge>
+                          <div className="flex flex-col gap-0.5">
+                            <Badge
+                              variant="outline"
+                              className="w-fit border-transparent bg-emerald-500/10 text-emerald-600"
+                            >
+                              Put back
+                            </Badge>
+                            {/* Without this the row is indistinguishable from a
+                                deleted one, on a page titled "Recycle bin". */}
+                            <span className="text-xs text-muted-foreground">Already in your list</span>
+                          </div>
                         ) : (
                           <span className="text-sm text-muted-foreground">{timeLeft(batch.purge_after)}</span>
                         )}
@@ -334,7 +383,7 @@ export function RecycleBinPage() {
                             onClick={() => purge(batch)}
                           >
                             <Trash2 data-icon="inline-start" />
-                            Delete forever
+                            {batch.restored_at ? "Remove this entry" : "Delete forever"}
                           </Button>
                         </div>
                       </TableCell>
