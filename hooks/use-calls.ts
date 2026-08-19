@@ -11,13 +11,34 @@ import type { VerticalFilter } from './use-leads';
  * the totals were read from `data.totalCount` while the route returned
  * `pagination.total`; and nothing ever refetched, so new calls never appeared.
  */
-export function useCalls(filter: string, page = 1, search = '', vertical: VerticalFilter = 'all') {
+export function useCalls(
+  filter: string,
+  page = 1,
+  search = '',
+  vertical: VerticalFilter = 'all',
+  /**
+   * Called-on range, as ISO timestamps.
+   *
+   * Note the name mismatch this bridges: /api/calls reads `startDate`/`endDate`,
+   * while /api/calls/bulk-delete reads `calledAfter`/`calledBefore` through
+   * parseCallLogFilters. Same column, two spellings. The range is held here in
+   * one shape and each caller sends the names its own endpoint understands, so
+   * the list and the delete cannot end up measuring different days.
+   */
+  range: { after?: string; before?: string } = {},
+) {
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Read off the object into primitives before the callback closes over them.
+  // `range` is an object literal at the call site, so a new identity arrives on
+  // every render; depending on it directly would refetch the list forever.
+  const rangeAfter = range.after ?? '';
+  const rangeBefore = range.before ?? '';
 
   const fetchCalls = useCallback(async () => {
     if (abortControllerRef.current) {
@@ -37,6 +58,8 @@ export function useCalls(filter: string, page = 1, search = '', vertical: Vertic
       params.set('page', String(page));
       params.set('limit', '20');
       params.set('vertical', vertical);
+      if (rangeAfter) params.set('startDate', rangeAfter);
+      if (rangeBefore) params.set('endDate', rangeBefore);
 
       const response = await fetch(`/api/calls?${params.toString()}`, {
         signal: abortController.signal,
@@ -57,7 +80,7 @@ export function useCalls(filter: string, page = 1, search = '', vertical: Vertic
     } finally {
       setIsLoading(false);
     }
-  }, [filter, page, search, vertical]);
+  }, [filter, page, search, vertical, rangeAfter, rangeBefore]);
 
   useEffect(() => {
     fetchCalls();

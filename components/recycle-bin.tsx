@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
 
 /**
  * The Recycle Bin.
@@ -154,29 +155,36 @@ export function RecycleBinPage() {
             Anything you delete is kept here for {retentionDays} days, then wiped automatically.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Tabs value={filter} onValueChange={setFilter}>
-            <TabsList>
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="lead">Leads</TabsTrigger>
-              <TabsTrigger value="call_log">Calls</TabsTrigger>
-              <TabsTrigger value="campaign">Campaigns</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw data-icon="inline-start" className={isLoading ? "animate-spin" : undefined} />
-            Refresh
-          </Button>
-          {batches.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={emptyAll}
-            >
-              Empty bin
+        {/* Four tabs plus two buttons in a non-shrinking row measured 417px on a
+            390px phone, which pushed the WHOLE PAGE into a horizontal scroll.
+            Two rows that each scroll on their own instead. */}
+        <div className="flex flex-col gap-2">
+          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0 md:pb-0">
+            <Tabs value={filter} onValueChange={setFilter}>
+              <TabsList className="w-max">
+                <TabsTrigger value="all">All</TabsTrigger>
+                <TabsTrigger value="lead">Leads</TabsTrigger>
+                <TabsTrigger value="call_log">Calls</TabsTrigger>
+                <TabsTrigger value="campaign">Campaigns</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <div className="flex items-center gap-2 md:justify-end">
+            <Button variant="outline" size="sm" onClick={load} className="shrink-0">
+              <RefreshCw data-icon="inline-start" className={isLoading ? "animate-spin" : undefined} />
+              Refresh
             </Button>
-          )}
+            {batches.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={emptyAll}
+              >
+                Empty bin
+              </Button>
+            )}
+          </div>
         </div>
       </section>
 
@@ -188,7 +196,73 @@ export function RecycleBinPage() {
         </Card>
       )}
 
-      <Card className="min-w-0">
+      {/* Phone layout. Restore and Delete forever are decisions, not icons, so
+          they get full-width buttons instead of the last column of a six-column
+          table that measured 851px inside a 356px card. */}
+      <Card className="min-w-0 md:hidden">
+        <CardContent className="p-0">
+          {batches.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              {isLoading ? "Loading…" : "The Recycle bin is empty. Nothing has been deleted recently."}
+            </p>
+          ) : (
+            <div className="flex flex-col">
+              {batches.map((batch) => {
+                const meta = ENTITY_META[batch.entity]
+                const Icon = meta?.icon ?? Users
+                return (
+                  <div key={batch.id} className="flex flex-col gap-3 border-b border-border/70 p-4 last:border-b-0">
+                    <div className="flex items-start gap-3">
+                      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium">{batch.filter_label}</p>
+                        {batch.cascaded_count > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            including {batch.cascaded_count.toLocaleString("en-IN")} call logs
+                          </p>
+                        )}
+                      </div>
+                      {batch.restored_at ? (
+                        <Badge variant="outline" className="border-transparent bg-emerald-500/10 text-emerald-600">
+                          Restored
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span className="font-mono">{batch.row_count.toLocaleString("en-IN")} rows</span>
+                      <span>{formatWhen(batch.created_at)}</span>
+                      {batch.deleted_by && <span className="truncate">{batch.deleted_by}</span>}
+                      {!batch.restored_at && <span>{timeLeft(batch.purge_after)}</span>}
+                    </div>
+
+                    <div className={cn("grid gap-2", batch.restored_at ? "grid-cols-1" : "grid-cols-2")}>
+                      {!batch.restored_at && (
+                        <Button variant="outline" size="sm" disabled={busyId === batch.id} onClick={() => restore(batch)}>
+                          <RotateCcw data-icon="inline-start" />
+                          Restore
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        disabled={busyId === batch.id}
+                        onClick={() => purge(batch)}
+                      >
+                        <Trash2 data-icon="inline-start" />
+                        Delete forever
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="hidden min-w-0 md:block">
         <CardContent className="overflow-x-auto p-0">
           <Table>
             <TableHeader>

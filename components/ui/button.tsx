@@ -24,13 +24,20 @@ const buttonVariants = cva(
         default:
           "h-9 gap-1.5 px-3.5 has-data-[icon=inline-end]:pr-2.5 has-data-[icon=inline-start]:pl-2.5",
         xs: "h-7 gap-1 rounded-[min(var(--radius-md),10px)] px-2.5 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-8 gap-1.5 rounded-[min(var(--radius-md),12px)] px-3 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5",
+        // Taller on touch, dense on a pointer. `sm` is the app's workhorse size —
+        // Call, Details, Settings, Pause, every filter — and at a flat h-8 it
+        // rendered 32px tall, well under the 44px touch minimum. The Campaigns
+        // page alone put 134 of them on a phone screen. Fingers get h-11;
+        // mice keep the h-8 density from `sm:` up, so no desktop layout moves.
+        sm: "h-11 gap-1.5 rounded-[min(var(--radius-md),12px)] px-3 text-[0.8rem] sm:h-8 in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-10 gap-2 px-4 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        icon: "size-9",
+        // Same reasoning as `sm`: an icon-only control gives no text to aim at,
+        // so it is the one that most needs the touch height.
+        icon: "size-11 sm:size-9",
         "icon-xs":
           "size-7 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":
-          "size-8 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
+          "size-10 rounded-[min(var(--radius-md),12px)] sm:size-8 in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-10",
       },
     },

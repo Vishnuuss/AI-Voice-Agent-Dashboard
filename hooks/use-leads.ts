@@ -22,6 +22,16 @@ export interface LeadQuery {
   /** A column from the API's SORTABLE set, e.g. 'follow_up_date'. */
   sort?: string;
   order?: 'asc' | 'desc';
+  /**
+   * Imported-on date range, as ISO timestamps.
+   *
+   * These are the parameter names lib/lead-filter.ts already parses, spelled
+   * identically here on purpose: the list route and the bulk-delete route both
+   * run them through parseLeadFilters, so passing the range straight through
+   * means "delete what I am looking at" cannot drift from what the table shows.
+   */
+  createdAfter?: string;
+  createdBefore?: string;
 }
 
 /**
@@ -62,6 +72,8 @@ export function useLeads(query: string, filter: LeadQuery, page: number, vertica
       if (parsed.outcome) params.set('outcome', parsed.outcome);
       if (parsed.sort) params.set('sort', parsed.sort);
       if (parsed.order) params.set('order', parsed.order);
+      if (parsed.createdAfter) params.set('createdAfter', parsed.createdAfter);
+      if (parsed.createdBefore) params.set('createdBefore', parsed.createdBefore);
       params.set('page', page.toString());
       params.set('limit', '20');
       // 'all' is sent explicitly rather than omitted so the request URL always

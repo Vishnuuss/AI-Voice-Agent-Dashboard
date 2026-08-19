@@ -269,9 +269,13 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
                     <TableRow>
                       <TableHead>When</TableHead>
                       <TableHead>Detail</TableHead>
-                      <TableHead className="text-right">Talk time</TableHead>
+                      {/* Column priority: on a phone this ledger is read to
+                          answer "what did that cost?", so When / Detail /
+                          Credits stay and the two supporting figures step
+                          aside rather than forcing a sideways scroll. */}
+                      <TableHead className="hidden text-right sm:table-cell">Talk time</TableHead>
                       <TableHead className="text-right">Credits</TableHead>
-                      <TableHead className="text-right">Balance</TableHead>
+                      <TableHead className="hidden text-right sm:table-cell">Balance</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -288,7 +292,7 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
                             <span className="text-muted-foreground">{e.description}</span>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                        <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">
                           {mmss(e.actual_seconds)}
                         </TableCell>
                         <TableCell
@@ -300,7 +304,7 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
                           {e.amount_credits > 0 ? '+' : ''}
                           {e.amount_credits.toFixed(2)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                        <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">
                           {e.balance_after_credits === null
                             ? '—'
                             : e.balance_after_credits.toLocaleString('en-IN', {

@@ -88,7 +88,8 @@ import { BsWealthLockupInline } from "@/components/brand/bs-wealth-mark"
 import { IntroSequence } from "@/components/motion/intro-sequence"
 import { Skeleton, StatSkeletonRow } from "@/components/motion/primitives"
 import { CallLeadButton, QuickCallDialog, callBlockedReason } from "@/components/manual-call"
-import { BulkDeleteBar, RowCheckbox, useRowSelection } from "@/components/bulk-delete"
+import { BulkDeleteBar, RowCheckbox, SelectButton, useRowSelection } from "@/components/bulk-delete"
+import { DateRangeFilter, EMPTY_RANGE, type DateRange } from "@/components/date-range-filter"
 import { RecycleBinPage } from "@/components/recycle-bin"
 import { FeedbackDialog } from "@/components/feedback-dialog"
 
@@ -151,6 +152,23 @@ function formatDate(value?: string | null) {
   if (!value) return "—"
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString()
+}
+
+/**
+ * Short timestamp for the phone cards: "19 Aug, 11:03 am".
+ *
+ * formatDateTime's full form ("8/19/2026, 11:03:04 AM") is 22 characters, which
+ * on a 390px card leaves the caller's name about half the row and truncates
+ * people like "Anreddysammireddy" to nothing useful. Seconds and the year are
+ * the parts nobody reads on a call list, so they are the parts that go.
+ */
+function formatDateTimeShort(value?: string | null) {
+  if (!value) return "—"
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d
+    .toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", hour12: true })
+    .replace(/\s?([ap])\.?m\.?/i, (_m, p) => ` ${p.toLowerCase()}m`)
 }
 
 function initialsOf(name?: string | null) {
@@ -455,21 +473,32 @@ function LeadRow({
           </div>
         </div>
       </TableCell>
-      <TableCell>
+      {/*
+        Hidden in step with its header — see the column-priority note there.
+
+        Dropped entirely in `compact`, which is the Overview card. That card
+        lives in a two-column grid, so it is ~620px wide no matter how big the
+        screen is; a viewport-based breakpoint cannot help it, because the
+        viewport is not what is squeezing it. Five columns measured 741px in
+        that 624px card even on a laptop. Source is the one the Overview needs
+        least — it is a six-row "what happened lately" glance, not a filterable
+        list — so it goes, and the remaining four fit.
+      */}
+      <TableCell className={cn("hidden", columns === "full" && "xl:table-cell")}>
         <span className="flex items-center gap-2 text-sm">
           {lead.source === "Excel" || lead.source === "CSV Upload" ? (
-            <FileSpreadsheet className="size-4 text-muted-foreground" />
+            <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
           ) : lead.source === "Website" ? (
-            <Globe className="size-4 text-muted-foreground" />
+            <Globe className="size-4 shrink-0 text-muted-foreground" />
           ) : (
-            <Megaphone className="size-4 text-muted-foreground" />
+            <Megaphone className="size-4 shrink-0 text-muted-foreground" />
           )}
           {lead.source || "Unknown"}
         </span>
       </TableCell>
       {columns === "full" && (
         <>
-          <TableCell>
+          <TableCell className="hidden 2xl:table-cell">
             <span className="text-sm text-muted-foreground">{lead.city || "—"}</span>
           </TableCell>
           {/* The solar agent asks two questions and neither is a loan type or a
@@ -526,7 +555,7 @@ function LeadRow({
       <TableCell>
         <StatusBadge status={leadStatusLabel(lead)} />
       </TableCell>
-      <TableCell className="text-right text-muted-foreground">
+      <TableCell className="whitespace-nowrap text-right text-muted-foreground">
         {/* The Call button lives in the existing last cell rather than a new
             column so both lead tables (and their empty-row colSpans) stay valid.
             It stops row-click propagation itself, so it cannot open the panel. */}
@@ -536,6 +565,195 @@ function LeadRow({
         </div>
       </TableCell>
     </TableRow>
+  )
+}
+
+/**
+ * A lead as a card, for phones.
+ *
+ * The table this replaces below `md` had nine columns. At 390px exactly two of
+ * them were on screen — Lead and Source — and Score and Status, which are the
+ * two the client actually works from, sat behind a horizontal scroll inside the
+ * card that nothing advertised. Reflowing the same fields into a stack fixes
+ * that without hiding anything: everything the wide table shows is here, just
+ * arranged down instead of across.
+ *
+ * These live in this file rather than their own because they read eight local
+ * helpers (score labels, vertical styling, requirement extraction, status
+ * wording). Exporting all eight to save 120 lines here would put the field
+ * vocabulary in two places, and the wide table and the card MUST describe a lead
+ * identically or the same row reads differently on a phone and a laptop.
+ */
+function LeadCardMobile({
+  lead,
+  onSelect,
+  solar = false,
+  onCallPlaced,
+  selectable,
+  selected,
+  onToggleSelect,
+}: {
+  lead: any
+  onSelect: (lead: any) => void
+  solar?: boolean
+  onCallPlaced?: () => void
+  selectable: boolean
+  selected: boolean
+  onToggleSelect: (id: string) => void
+}) {
+  const score = lead.score ?? 0
+  const scoreData = getScoreLabel(score)
+  const detail = solar ? houseOf(lead) : requirementOf(lead)
+  const detail2 = solar ? solarPlanOf(lead) : lead.budget
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      // While selecting, the whole card is the tick. A 16px checkbox is below
+      // every touch-target guideline there is, and asking someone to hit one
+      // repeatedly on a moving bus is how you delete the wrong lead.
+      onClick={() => (selectable ? onToggleSelect(lead.id) : onSelect(lead))}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          selectable ? onToggleSelect(lead.id) : onSelect(lead)
+        }
+      }}
+      aria-pressed={selectable ? selected : undefined}
+      className={cn(
+        "flex w-full cursor-pointer flex-col gap-3 border-b border-border/70 p-4 text-left transition-colors last:border-b-0",
+        selected ? "bg-primary/5" : "active:bg-muted/60",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {selectable && (
+          <span className="mt-0.5 shrink-0">
+            <RowCheckbox
+              checked={selected}
+              onChange={() => onToggleSelect(lead.id)}
+              label={`Select ${lead.name || lead.phone}`}
+            />
+          </span>
+        )}
+        <Avatar className="size-9 shrink-0">
+          <AvatarFallback>{initialsOf(lead.name)}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{lead.name || "Unknown"}</p>
+          <p className="truncate text-xs text-muted-foreground">{lead.phone}</p>
+        </div>
+        <StatusBadge status={leadStatusLabel(lead)} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge
+          variant="outline"
+          className={`${scoreData.color} ${scoreData.bg} border-transparent`}
+          title={scoreReasonOf(lead)}
+        >
+          {score > 0 ? `${scoreData.label} · ${score}` : "Unscored"}
+        </Badge>
+        <Badge
+          variant="outline"
+          className={`${verticalStyle(lead).color} ${verticalStyle(lead).bg} border-transparent`}
+        >
+          {verticalLabelOf(lead)}
+        </Badge>
+      </div>
+
+      {(detail || detail2) && (
+        <p className="truncate text-sm text-muted-foreground">
+          {[detail, detail2].filter(Boolean).join(" · ")}
+        </p>
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="truncate text-xs text-muted-foreground">
+          {lead.city ? `${lead.city} · ` : ""}
+          {formatDate(lead.last_attempt_at || lead.created_at)}
+        </span>
+        {/* Hidden while selecting: a Call button inside a row you are trying to
+            tick is a real call placed by a mis-tap, and this one dials for money. */}
+        {!selectable && <CallLeadButton lead={lead} onPlaced={onCallPlaced} />}
+      </div>
+    </div>
+  )
+}
+
+/** A call log as a card, for phones. Same reasoning as LeadCardMobile. */
+function CallCardMobile({
+  call,
+  onSelect,
+  selectable,
+  selected,
+  onToggleSelect,
+}: {
+  call: any
+  onSelect: (lead: any, callId?: string | null) => void
+  selectable: boolean
+  selected: boolean
+  onToggleSelect: (id: string) => void
+}) {
+  const openable = !!call.leads
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => (selectable ? onToggleSelect(call.id) : openable && onSelect(call.leads, call.id))}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          selectable ? onToggleSelect(call.id) : openable && onSelect(call.leads, call.id)
+        }
+      }}
+      aria-pressed={selectable ? selected : undefined}
+      className={cn(
+        "flex w-full flex-col gap-2 border-b border-border/70 p-4 text-left transition-colors last:border-b-0",
+        selected ? "bg-primary/5" : "active:bg-muted/60",
+        (selectable || openable) && "cursor-pointer",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {selectable && (
+          <span className="mt-0.5 shrink-0">
+            <RowCheckbox
+              checked={selected}
+              onChange={() => onToggleSelect(call.id)}
+              label={`Select call to ${call.leads?.name || call.leads?.phone || "unknown"}`}
+            />
+          </span>
+        )}
+        <span className="mt-0.5 shrink-0">
+          <CallOutcomeIcon outcome={call.outcome} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{call.leads?.name || "Unknown"}</p>
+          <p className="truncate text-xs text-muted-foreground">{call.leads?.phone || ""}</p>
+        </div>
+        <span className="shrink-0 text-xs text-muted-foreground">{formatDateTimeShort(call.called_at)}</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 ps-8 text-xs text-muted-foreground">
+        <span>{OUTCOME_LABELS[call.outcome] || call.outcome || "—"}</span>
+        <span className="font-mono">{formatDuration(call.duration)}</span>
+        <span>Attempt #{call.attempt_no ?? 1}</span>
+        {call.recording_url && !selectable && (
+          <a
+            href={call.recording_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            // -my-2 py-2 gives the link a 36px tap height without adding 16px of
+            // space to the row: as bare text it was 16px tall, the smallest
+            // target left in the app and the one people reach for most.
+            className="-my-2 inline-flex min-h-9 items-center py-2 font-medium text-primary underline underline-offset-4"
+          >
+            Play recording
+          </a>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -822,12 +1040,39 @@ function OverviewPage({
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="overflow-x-auto p-0">
+          {/* Phones get the same card the Leads page uses. This card sits in a
+              two-column grid, so even on a laptop it only gets ~620px — a
+              five-column table never fitted that and scrolled sideways inside
+              its own card, which is the least discoverable scroll there is. */}
+          <CardContent className="p-0 md:hidden">
+            {leads.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                No leads yet. Use “Import leads” to upload a CSV.
+              </p>
+            ) : (
+              <div className="stagger-rows flex flex-col">
+                {leads.slice(0, 6).map((lead) => (
+                  <LeadCardMobile
+                    key={lead.id}
+                    lead={lead}
+                    onSelect={onSelectLead}
+                    selectable={false}
+                    selected={false}
+                    onToggleSelect={() => {}}
+                  />
+                ))}
+              </div>
+            )}
+          </CardContent>
+
+          <CardContent className="hidden overflow-x-auto p-0 md:block">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Lead</TableHead>
-                  <TableHead>Source</TableHead>
+                  {/* No Source header here: LeadRow drops that cell entirely in
+                      compact mode. A header that outlives its column shifts
+                      every cell in the row one place to the left. */}
                   <TableHead>Score</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Last activity</TableHead>
@@ -835,7 +1080,7 @@ function OverviewPage({
               </TableHeader>
               <TableBody className="stagger-rows">
                 {leads.length === 0 ? (
-                  <EmptyRow colSpan={5}>No leads yet. Use “Import leads” to upload a CSV.</EmptyRow>
+                  <EmptyRow colSpan={4}>No leads yet. Use “Import leads” to upload a CSV.</EmptyRow>
                 ) : (
                   leads.slice(0, 6).map((lead) => (
                     <LeadRow key={lead.id} lead={lead} onSelect={onSelectLead} columns="compact" />
@@ -899,6 +1144,8 @@ function LeadsPage({
   onCallPlaced,
   deleteFilters,
   onDeleted,
+  dateRange,
+  setDateRange,
 }: {
   leads: any[]
   onSelectLead: (lead: any, callId?: string | null) => void
@@ -916,6 +1163,8 @@ function LeadsPage({
    *  names, so the delete acts on the same set the table is showing. */
   deleteFilters: Record<string, any>
   onDeleted: () => void
+  dateRange: DateRange
+  setDateRange: (r: DateRange) => void
 }) {
   // On the Solar view the table shows the solar answers instead of the loan
   // ones. Only when Solar is actually selected: under "All" the table mixes
@@ -926,9 +1175,15 @@ function LeadsPage({
   // ticked under one filter is not necessarily visible under the next, and
   // deleting something the client can no longer see is the failure this feature
   // must never have.
-  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(
-    `${statusFilter}|${vertical}|${JSON.stringify(deleteFilters)}`,
-  )
+  const {
+    selected,
+    toggle,
+    setPage: setPageSelection,
+    clear,
+    active: selecting,
+    enter: enterSelection,
+    exit: exitSelection,
+  } = useRowSelection(`${statusFilter}|${vertical}|${JSON.stringify(deleteFilters)}`)
   const pageIds = leads.map((lead) => lead.id)
   const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.includes(id))
   const someOnPage = pageIds.some((id) => selected.includes(id))
@@ -942,9 +1197,12 @@ function LeadsPage({
             Manage and track all {leadStats?.total ?? totalCount} leads across sources.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Scrolls sideways rather than wrapping on a phone: three controls at
+            full size wrap to two rows and push the table below the fold, and the
+            table is what the client came for. */}
+        <div className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 md:mx-0 md:overflow-visible md:px-0 md:pb-0">
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
+            <DropdownMenuTrigger render={<Button variant={statusFilter === "All" ? "outline" : "default"} size="sm" className="shrink-0" />}>
               <ListFilter data-icon="inline-start" />
               {statusFilter === "All" ? "Filter" : statusFilter}
             </DropdownMenuTrigger>
@@ -956,62 +1214,116 @@ function LeadsPage({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          <DateRangeFilter value={dateRange} onChange={setDateRange} noun="Imported" className="shrink-0" />
+          <SelectButton
+            active={selecting}
+            onEnter={enterSelection}
+            onExit={exitSelection}
+            className="shrink-0"
+          />
         </div>
       </section>
 
-      <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* Four across on a phone rather than two-by-two. As a 2x2 grid of
+          full-size cards these four numbers cost about 300px — most of a phone
+          screen — before the first lead appeared, so the list the client came
+          for started below the fold on every visit. They are context, not the
+          content; one compact row says the same thing in a quarter of the space. */}
+      <div className="stagger grid grid-cols-4 gap-2 md:gap-4">
         <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-semibold">{leadStats?.total ?? 0}</p>
-            <p className="text-xs text-muted-foreground">Total leads</p>
+          <CardContent className="p-3 md:p-4">
+            <p className="text-lg font-semibold tabular-nums md:text-2xl">{leadStats?.total ?? 0}</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Total leads</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-semibold">{leadStats?.qualified ?? 0}</p>
-            <p className="text-xs text-muted-foreground">Qualified</p>
+          <CardContent className="p-3 md:p-4">
+            <p className="text-lg font-semibold tabular-nums md:text-2xl">{leadStats?.qualified ?? 0}</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Qualified</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-semibold">{leadStats?.new_leads ?? 0}</p>
-            <p className="text-xs text-muted-foreground">New</p>
+          <CardContent className="p-3 md:p-4">
+            <p className="text-lg font-semibold tabular-nums md:text-2xl">{leadStats?.new_leads ?? 0}</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">New</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-semibold">{leadStats?.called ?? 0}</p>
-            <p className="text-xs text-muted-foreground">Called</p>
+          <CardContent className="p-3 md:p-4">
+            <p className="text-lg font-semibold tabular-nums md:text-2xl">{leadStats?.called ?? 0}</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Called</p>
           </CardContent>
         </Card>
       </div>
 
       <BulkDeleteBar
         entity="leads"
+        active={selecting}
         selected={selected}
         onClearSelection={clear}
+        onExitSelection={exitSelection}
+        onSelectAllOnPage={(checked) => setPageSelection(pageIds, checked)}
+        pageCount={pageIds.length}
+        allOnPageSelected={allOnPage}
         filters={deleteFilters}
-        filterIsActive={statusFilter !== "All" || vertical !== "all"}
+        filterIsActive={statusFilter !== "All" || vertical !== "all" || !!dateRange.from || !!dateRange.to}
         matchingCount={totalCount}
         onDeleted={onDeleted}
       />
 
-      <Card className="min-w-0">
+      {/* Phones get cards; `md` and up keeps the wide table unchanged. */}
+      <Card className="min-w-0 md:hidden">
+        <CardContent className="p-0">
+          {leads.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              {isLoading ? "Loading leads…" : "No leads found. Import a file to add leads."}
+            </p>
+          ) : (
+            <div className="stagger-rows flex flex-col">
+              {leads.map((lead) => (
+                <LeadCardMobile
+                  key={lead.id}
+                  lead={lead}
+                  onSelect={onSelectLead}
+                  solar={solar}
+                  onCallPlaced={onCallPlaced}
+                  selectable={selecting}
+                  selected={selected.includes(lead.id)}
+                  onToggleSelect={toggle}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="hidden min-w-0 md:block">
         <CardContent className="overflow-x-auto p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
-                  <RowCheckbox
-                    checked={allOnPage}
-                    indeterminate={someOnPage}
-                    onChange={(checked) => setPageSelection(pageIds, checked)}
-                    label="Select every lead on this page"
-                  />
-                </TableHead>
+                {selecting && (
+                  <TableHead className="w-10">
+                    <RowCheckbox
+                      checked={allOnPage}
+                      indeterminate={someOnPage}
+                      onChange={(checked) => setPageSelection(pageIds, checked)}
+                      label="Select every lead on this page"
+                    />
+                  </TableHead>
+                )}
                 <TableHead>Lead</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead>Location</TableHead>
+                {/* Column priority. Eight columns did not fit a 1366px laptop —
+                    the table measured 1083px inside a 1044px column and scrolled
+                    sideways. Rather than shrink everything until it is all
+                    equally unreadable, the two lowest-value columns step aside
+                    on narrower screens: Source is almost always "file_upload",
+                    and Location is blank for most leads. Both are still in the
+                    lead's detail panel and on the phone card, so nothing is lost
+                    — they simply stop outranking Score and Status, which are
+                    what this table is read for. */}
+                <TableHead className="hidden xl:table-cell">Source</TableHead>
+                <TableHead className="hidden 2xl:table-cell">Location</TableHead>
                 {/* Not "Loan type": this table holds all four business lines.
                     On Solar it becomes the two questions the agent asks. */}
                 {solar ? (
@@ -1032,7 +1344,7 @@ function LeadsPage({
             </TableHeader>
             <TableBody className="stagger-rows">
               {leads.length === 0 ? (
-                <EmptyRow colSpan={9}>
+                <EmptyRow colSpan={selecting ? 9 : 8}>
                   {isLoading ? "Loading leads…" : "No leads found. Upload a CSV to import leads."}
                 </EmptyRow>
               ) : (
@@ -1045,7 +1357,10 @@ function LeadsPage({
                     solar={solar}
                     onCallPlaced={onCallPlaced}
                     selected={selected.includes(lead.id)}
-                    onToggleSelect={toggle}
+                    // Passing this is what adds the tick column, so withholding
+                    // it outside selection mode removes the column entirely
+                    // rather than leaving an empty 40px gutter behind.
+                    onToggleSelect={selecting ? toggle : undefined}
                   />
                 ))
               )}
@@ -1070,14 +1385,18 @@ function CallsPage({
 }) {
   const [callFilter, setCallFilter] = useState("all")
   const [page, setPage] = useState(1)
+  const [dateRange, setDateRange] = useState<DateRange>(EMPTY_RANGE)
   // Filtering happens server-side on outcome. The old tabs filtered on a
   // `direction` field that no call row has ever carried, so every tab but "All"
   // rendered an empty table.
-  const { calls, totalCount, totalPages, isLoading, refresh } = useCalls(callFilter, page, "", vertical)
+  const { calls, totalCount, totalPages, isLoading, refresh } = useCalls(callFilter, page, "", vertical, {
+    after: dateRange.from,
+    before: dateRange.to,
+  })
 
   useEffect(() => {
     setPage(1)
-  }, [callFilter, vertical])
+  }, [callFilter, vertical, dateRange.from, dateRange.to])
 
   // The tabs group several outcomes under one label ("No answer" covers busy and
   // voicemail too). The delete endpoint takes the raw outcomes, so the grouping
@@ -1091,9 +1410,23 @@ function CallsPage({
   const deleteFilters = {
     outcome: CALL_FILTER_OUTCOMES[callFilter],
     vertical: vertical === "all" ? undefined : vertical,
+    // The delete route spells these `calledAfter`/`calledBefore` while the list
+    // route reads `startDate`/`endDate`. Same column, two names — see the note
+    // on useCalls. Sent under the delete's own spelling so a date-limited delete
+    // covers exactly the days the table is showing.
+    calledAfter: dateRange.from,
+    calledBefore: dateRange.to,
   }
 
-  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(`${callFilter}|${vertical}`)
+  const {
+    selected,
+    toggle,
+    setPage: setPageSelection,
+    clear,
+    active: selecting,
+    enter: enterSelection,
+    exit: exitSelection,
+  } = useRowSelection(`${callFilter}|${vertical}|${dateRange.from ?? ""}|${dateRange.to ?? ""}`)
   const pageIds = calls.map((call: any) => call.id)
   const allOnPage = pageIds.length > 0 && pageIds.every((id: string) => selected.includes(id))
   const someOnPage = pageIds.some((id: string) => selected.includes(id))
@@ -1105,84 +1438,137 @@ function CallsPage({
           <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Call History</h1>
           <p className="mt-1 text-sm text-muted-foreground">{callStats?.total ?? 0} calls recorded.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Tabs value={callFilter} onValueChange={setCallFilter}>
-            <TabsList>
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="connected">Connected</TabsTrigger>
-              <TabsTrigger value="missed">No answer</TabsTrigger>
-              <TabsTrigger value="failed">Failed</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Button variant="outline" size="sm" onClick={refresh}>
-            <RefreshCw data-icon="inline-start" className={cn(isLoading && "animate-spin")} />
-            Refresh
-          </Button>
+        {/* Two scrollable rows on a phone rather than one wrapped block: the
+            outcome tabs and the date/select controls are different decisions and
+            reading them as one run of eight buttons is what made this page feel
+            like a wall. */}
+        <div className="flex flex-col gap-2">
+          <div className="-mx-4 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0 md:pb-0">
+            <Tabs value={callFilter} onValueChange={setCallFilter}>
+              <TabsList className="w-max">
+                <TabsTrigger value="all">All</TabsTrigger>
+                <TabsTrigger value="connected">Connected</TabsTrigger>
+                <TabsTrigger value="missed">No answer</TabsTrigger>
+                <TabsTrigger value="failed">Failed</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <div className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 md:mx-0 md:justify-end md:overflow-visible md:px-0 md:pb-0">
+            <DateRangeFilter value={dateRange} onChange={setDateRange} noun="Called" className="shrink-0" />
+            <SelectButton
+              active={selecting}
+              onEnter={enterSelection}
+              onExit={exitSelection}
+              className="shrink-0"
+            />
+            <Button variant="outline" size="sm" onClick={refresh} className="shrink-0">
+              <RefreshCw data-icon="inline-start" className={cn(isLoading && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
         </div>
       </section>
 
-      <div className="stagger grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* Four across on a phone — same reasoning as the Leads tiles. The icon
+          hides below `md`: at ~80px per tile it pushes the number onto a second
+          line, and the label already says which number this is. */}
+      <div className="stagger grid grid-cols-4 gap-2 md:gap-4">
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 md:p-4">
             <div className="flex items-center gap-2">
-              <PhoneCall className="size-4 text-primary" />
-              <span className="text-2xl font-semibold">{callStats?.total ?? 0}</span>
+              <PhoneCall className="hidden size-4 text-primary md:block" />
+              <span className="text-lg font-semibold tabular-nums md:text-2xl">{callStats?.total ?? 0}</span>
             </div>
-            <p className="text-xs text-muted-foreground">Total calls</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Total calls</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 md:p-4">
             <div className="flex items-center gap-2">
-              <PhoneForwarded className="size-4 text-primary" />
-              <span className="text-2xl font-semibold">{callStats?.connected ?? 0}</span>
+              <PhoneForwarded className="hidden size-4 text-primary md:block" />
+              <span className="text-lg font-semibold tabular-nums md:text-2xl">{callStats?.connected ?? 0}</span>
             </div>
-            <p className="text-xs text-muted-foreground">Connected</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Connected</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 md:p-4">
             <div className="flex items-center gap-2">
-              <PhoneMissed className="size-4 text-destructive" />
-              <span className="text-2xl font-semibold">{(callStats?.missed ?? 0) + (callStats?.failed ?? 0)}</span>
+              <PhoneMissed className="hidden size-4 text-destructive md:block" />
+              <span className="text-lg font-semibold tabular-nums md:text-2xl">
+                {(callStats?.missed ?? 0) + (callStats?.failed ?? 0)}
+              </span>
             </div>
-            <p className="text-xs text-muted-foreground">Not connected</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Not connected</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 md:p-4">
             <div className="flex items-center gap-2">
-              <Clock3 className="size-4 text-muted-foreground" />
-              <span className="text-2xl font-semibold">{formatDuration(callStats?.avg_duration)}</span>
+              <Clock3 className="hidden size-4 text-muted-foreground md:block" />
+              <span className="text-lg font-semibold tabular-nums md:text-2xl">
+                {formatDuration(callStats?.avg_duration)}
+              </span>
             </div>
-            <p className="text-xs text-muted-foreground">Avg. connected call</p>
+            <p className="text-[11px] leading-tight text-muted-foreground md:text-xs">Avg. call</p>
           </CardContent>
         </Card>
       </div>
 
       <BulkDeleteBar
         entity="calls"
+        active={selecting}
         selected={selected}
         onClearSelection={clear}
+        onExitSelection={exitSelection}
+        onSelectAllOnPage={(checked) => setPageSelection(pageIds, checked)}
+        pageCount={pageIds.length}
+        allOnPageSelected={allOnPage}
         filters={deleteFilters}
-        filterIsActive={callFilter !== "all" || vertical !== "all"}
+        filterIsActive={callFilter !== "all" || vertical !== "all" || !!dateRange.from || !!dateRange.to}
         matchingCount={totalCount}
         onDeleted={refresh}
       />
 
-      <Card className="min-w-0">
+      {/* Phones get cards; `md` and up keeps the wide table unchanged. */}
+      <Card className="min-w-0 md:hidden">
+        <CardContent className="p-0">
+          {calls.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              {isLoading ? "Loading calls…" : "No calls recorded yet."}
+            </p>
+          ) : (
+            <div className="stagger-rows flex flex-col">
+              {calls.map((call: any) => (
+                <CallCardMobile
+                  key={call.id}
+                  call={call}
+                  onSelect={onSelectLead}
+                  selectable={selecting}
+                  selected={selected.includes(call.id)}
+                  onToggleSelect={toggle}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="hidden min-w-0 md:block">
         <CardContent className="overflow-x-auto p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
-                  <RowCheckbox
-                    checked={allOnPage}
-                    indeterminate={someOnPage}
-                    onChange={(checked) => setPageSelection(pageIds, checked)}
-                    label="Select every call on this page"
-                  />
-                </TableHead>
+                {selecting && (
+                  <TableHead className="w-10">
+                    <RowCheckbox
+                      checked={allOnPage}
+                      indeterminate={someOnPage}
+                      onChange={(checked) => setPageSelection(pageIds, checked)}
+                      label="Select every call on this page"
+                    />
+                  </TableHead>
+                )}
                 <TableHead>Status</TableHead>
                 <TableHead>Lead</TableHead>
                 <TableHead>Outcome</TableHead>
@@ -1194,7 +1580,7 @@ function CallsPage({
             </TableHeader>
             <TableBody className="stagger-rows">
               {calls.length === 0 ? (
-                <EmptyRow colSpan={8}>
+                <EmptyRow colSpan={selecting ? 8 : 7}>
                   {isLoading ? "Loading calls…" : "No calls recorded yet. Launch a campaign to start calling."}
                 </EmptyRow>
               ) : (
@@ -1204,13 +1590,15 @@ function CallsPage({
                     className={cn(call.leads && "cursor-pointer hover:bg-muted/50")}
                     onClick={() => call.leads && onSelectLead(call.leads, call.id)}
                   >
-                    <TableCell className="w-10">
-                      <RowCheckbox
-                        checked={selected.includes(call.id)}
-                        onChange={() => toggle(call.id)}
-                        label={`Select call to ${call.leads?.name || call.leads?.phone || "unknown"}`}
-                      />
-                    </TableCell>
+                    {selecting && (
+                      <TableCell className="w-10">
+                        <RowCheckbox
+                          checked={selected.includes(call.id)}
+                          onChange={() => toggle(call.id)}
+                          label={`Select call to ${call.leads?.name || call.leads?.phone || "unknown"}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <CallOutcomeIcon outcome={call.outcome} />
                     </TableCell>
@@ -1226,10 +1614,10 @@ function CallsPage({
                     <TableCell>
                       <span className="text-sm">{OUTCOME_LABELS[call.outcome] || call.outcome || "—"}</span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <span className="font-mono text-sm">{formatDuration(call.duration)}</span>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">#{call.attempt_no ?? 1}</TableCell>
+                    <TableCell className="whitespace-nowrap text-sm text-muted-foreground">#{call.attempt_no ?? 1}</TableCell>
                     <TableCell>
                       {call.recording_url ? (
                         <a
@@ -1245,7 +1633,7 @@ function CallsPage({
                         <span className="text-sm text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-right text-sm text-muted-foreground">
                       {formatDateTime(call.called_at)}
                     </TableCell>
                   </TableRow>
@@ -1407,7 +1795,15 @@ function CampaignsPage({
   // worse than not offering it.
   const DELETABLE = ["completed", "failed", "cancelled"]
   const deletableCampaigns = campaignsData.filter((c: any) => DELETABLE.includes(c.status))
-  const { selected, toggle, setPage: setPageSelection, clear } = useRowSelection(campaignsData.length)
+  const {
+    selected,
+    toggle,
+    setPage: setPageSelection,
+    clear,
+    active: selecting,
+    enter: enterSelection,
+    exit: exitSelection,
+  } = useRowSelection(campaignsData.length)
   const deletableIds = deletableCampaigns.map((c: any) => c.id)
   const allSelected = deletableIds.length > 0 && deletableIds.every((id: string) => selected.includes(id))
   const someSelected = deletableIds.some((id: string) => selected.includes(id))
@@ -1460,19 +1856,35 @@ function CampaignsPage({
 
       {deletableCampaigns.length > 0 && (
         <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
-            <RowCheckbox
-              checked={allSelected}
-              indeterminate={someSelected}
-              onChange={(checked) => setPageSelection(deletableIds, checked)}
-              label="Select every finished campaign"
-            />
-            Select all {deletableCampaigns.length} finished campaign{deletableCampaigns.length === 1 ? "" : "s"}
-          </label>
+          {/* The "select all finished" line only exists once the client has
+              actually asked to select. Outside that it was a permanent tick box
+              on a page whose main job is watching campaigns run. */}
+          <div className="flex items-center gap-3 px-1">
+            <SelectButton active={selecting} onEnter={enterSelection} onExit={exitSelection} />
+            {selecting && (
+              <label className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+                <RowCheckbox
+                  checked={allSelected}
+                  indeterminate={someSelected}
+                  onChange={(checked) => setPageSelection(deletableIds, checked)}
+                  label="Select every finished campaign"
+                />
+                <span className="truncate">
+                  All {deletableCampaigns.length} finished campaign
+                  {deletableCampaigns.length === 1 ? "" : "s"}
+                </span>
+              </label>
+            )}
+          </div>
           <BulkDeleteBar
             entity="campaigns"
+            active={selecting}
             selected={selected}
             onClearSelection={clear}
+            onExitSelection={exitSelection}
+            onSelectAllOnPage={(checked) => setPageSelection(deletableIds, checked)}
+            pageCount={deletableIds.length}
+            allOnPageSelected={allSelected}
             filters={{ status: "completed,failed,cancelled" }}
             filterIsActive={false}
             matchingCount={deletableCampaigns.length}
@@ -1509,8 +1921,9 @@ function CampaignsPage({
                 <CardContent className="p-5">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-4">
-                      {/* Rendered only for finished campaigns — see DELETABLE above. */}
-                      {DELETABLE.includes(status) && (
+                      {/* Rendered only while selecting, and only for finished
+                          campaigns — see DELETABLE above. */}
+                      {selecting && DELETABLE.includes(status) && (
                         <RowCheckbox
                           checked={selected.includes(campaign.id)}
                           onChange={() => toggle(campaign.id)}
@@ -1831,7 +2244,9 @@ function FollowUpsPage({
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Follow-ups</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{totalCount} leads have a follow-up scheduled.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {totalCount === 1 ? "1 lead has" : `${totalCount} leads have`} a follow-up scheduled.
+          </p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh}>
           <RefreshCw data-icon="inline-start" className={cn(isLoading && "animate-spin")} />
@@ -1883,7 +2298,79 @@ function FollowUpsPage({
           <CardTitle>Scheduled follow-ups</CardTitle>
           <CardDescription>Leads that asked to be contacted again</CardDescription>
         </CardHeader>
-        <CardContent className="overflow-x-auto p-0">
+        {/* Phone layout. A follow-up is something you act on while holding the
+            phone you are about to call from, so the two actions are full-width
+            buttons rather than 32px icons in a table's last column. */}
+        <CardContent className="p-0 md:hidden">
+          {leads.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              {isLoading
+                ? "Loading follow-ups…"
+                : "No follow-ups scheduled. A follow-up appears here when a call captures a callback date."}
+            </p>
+          ) : (
+            <div className="stagger-rows flex flex-col">
+              {leads.map((lead: any) => (
+                <div
+                  key={lead.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectLead(lead)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      onSelectLead(lead)
+                    }
+                  }}
+                  className="flex cursor-pointer flex-col gap-3 border-b border-border/70 p-4 transition-colors last:border-b-0 active:bg-muted/60"
+                >
+                  <div className="flex items-start gap-3">
+                    <Avatar className="size-9 shrink-0">
+                      <AvatarFallback>{initialsOf(lead.name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{lead.name || "Unknown"}</p>
+                      <p className="truncate text-xs text-muted-foreground">{lead.phone}</p>
+                    </div>
+                    <StatusBadge status={leadStatusLabel(lead)} />
+                  </div>
+
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Call back on </span>
+                    <span className="font-medium">{formatDate(lead.follow_up_date)}</span>
+                  </p>
+
+                  {lead.notes && (
+                    <p className="line-clamp-2 text-sm text-muted-foreground">{lead.notes}</p>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href={`tel:${dialable(lead.phone)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                    >
+                      <Phone data-icon="inline-start" />
+                      Call
+                    </a>
+                    <a
+                      href={`https://wa.me/${dialable(lead.phone).replace(/^\+/, "")}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                    >
+                      <MessageSquare data-icon="inline-start" />
+                      WhatsApp
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+
+        <CardContent className="hidden overflow-x-auto p-0 md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1918,11 +2405,13 @@ function FollowUpsPage({
                     <TableCell>
                       <StatusBadge status={leadStatusLabel(lead)} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <span className="text-sm font-medium">{formatDate(lead.follow_up_date)}</span>
                     </TableCell>
-                    <TableCell>
-                      <span className="line-clamp-1 text-sm text-muted-foreground">{lead.notes || "—"}</span>
+                    {/* Capped, because notes hold whole call logs. Uncapped this
+                        one column set the width of the entire table. */}
+                    <TableCell className="max-w-xs">
+                      <span className="line-clamp-2 text-sm text-muted-foreground">{lead.notes || "—"}</span>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
@@ -2300,7 +2789,10 @@ function ReportsPage({
                       <TableCell>{share}%</TableCell>
                       <TableCell>
                         <div className="flex justify-end">
-                          <Progress value={share} className="h-2 w-32" />
+                          {/* A fixed 128px bar was the last 13px of overflow on
+                              this table. It is a proportion, so it can be any
+                              width. */}
+                          <Progress value={share} className="h-2 w-16 sm:w-32" />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -3624,7 +4116,10 @@ function VerticalSwitch({
             aria-selected={active}
             onClick={() => onChange(option.value)}
             className={cn(
-              "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors",
+              // min-h-9 on touch: these pills were 24px tall, and they switch
+              // which business gets called — the most consequential control on
+              // the page and, until now, the smallest thing on it.
+              "flex min-h-9 shrink-0 items-center whitespace-nowrap rounded-full px-3.5 text-xs font-medium transition-colors sm:min-h-0 sm:px-3 sm:py-1",
               active
                 ? style
                   ? `${style.bg} ${style.color}`
@@ -3650,6 +4145,10 @@ export function LeadCommandDashboard() {
   const [focusCallId, setFocusCallId] = useState<string | null>(null)
   const [campaignOpen, setCampaignOpen] = useState(false)
   const [statusFilter, setStatusFilter] = useState("All")
+  // Held at the shell rather than inside LeadsPage: the delete filters are built
+  // here, and the range has to reach them or a date-limited delete would quietly
+  // ignore the dates the client is looking at.
+  const [leadDateRange, setLeadDateRange] = useState<DateRange>(EMPTY_RANGE)
   const [notifOpen, setNotifOpen] = useState(false)
   const [topUpOpen, setTopUpOpen] = useState(false)
   const [readNotifs, setReadNotifs] = useState<string[]>([])
@@ -3697,11 +4196,18 @@ export function LeadCommandDashboard() {
 
   useEffect(() => {
     setLeadPage(1)
-  }, [debouncedQuery, statusFilter])
+  }, [debouncedQuery, statusFilter, leadDateRange.from, leadDateRange.to])
 
+  // The date range folds into the SAME LeadQuery the status filter produces, so
+  // it travels to the list route and the delete route through one object under
+  // the parameter names lib/lead-filter.ts already parses. No second code path.
   const leadFilter = useMemo<LeadQuery>(
-    () => LEAD_FILTERS.find((option) => option.label === statusFilter)?.query ?? {},
-    [statusFilter],
+    () => ({
+      ...(LEAD_FILTERS.find((option) => option.label === statusFilter)?.query ?? {}),
+      createdAfter: leadDateRange.from,
+      createdBefore: leadDateRange.to,
+    }),
+    [statusFilter, leadDateRange.from, leadDateRange.to],
   )
 
   // The same filter the list is fetched with, handed to the bulk delete so the
@@ -4060,6 +4566,8 @@ export function LeadCommandDashboard() {
             onCallPlaced={refreshAll}
             deleteFilters={leadDeleteFilters}
             onDeleted={refreshAll}
+            dateRange={leadDateRange}
+            setDateRange={setLeadDateRange}
           />
         )
       case "Calls":
@@ -4238,73 +4746,150 @@ export function LeadCommandDashboard() {
 
       {/* Main content */}
       <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-30 flex h-20 items-center gap-2 border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl sm:gap-3 md:px-6">
-          <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(true)}>
-            <Menu />
-            <span className="sr-only">Open menu</span>
-          </Button>
-          <div className="relative max-w-md flex-1">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              className="h-9 w-full min-w-0 rounded-full border border-input bg-muted/40 px-2.5 py-1 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-              placeholder="Search leads…"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value)
-                // Searching only makes sense on a lead list, so jump there.
-                if (e.target.value && activeNav !== "Leads" && activeNav !== "Overview") setActiveNav("Leads")
-              }}
-            />
-          </div>
-          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-            {/* Balance first in the cluster: it is the one number that changes
-                what the other buttons cost, so it reads before them. */}
-            <CreditsPill onTopUp={() => setTopUpOpen(true)} />
+        {/*
+          Two layouts, not one squeezed layout.
+
+          Below `lg` this row used to carry nine controls that could not shrink —
+          hamburger, search, credits, Import, Call one person, Start campaign,
+          Refresh, Feedback, Bell — which made the row 430px wide inside a 380px
+          phone. That 50px is why the WHOLE PAGE scrolled sideways: every screen
+          in the app inherited a horizontal scrollbar from this one bar, and the
+          search input, being the only flexible thing in the row, lost the fight
+          and collapsed to 48px.
+
+          The phone layout keeps the three things that must be one tap — menu,
+          balance, notifications — puts search on its own full-width row where it
+          is actually typeable, and moves the three "do something" actions behind
+          a single labelled button. The `lg` layout is unchanged.
+        */}
+        <header className="sticky top-0 z-30 border-b border-border/70 bg-background/80 backdrop-blur-xl">
+          <div className="flex h-16 items-center gap-2 px-3 lg:h-20 lg:gap-3 lg:px-6">
+            <Button variant="ghost" size="icon" className="shrink-0 lg:hidden" onClick={() => setSidebarOpen(true)}>
+              <Menu />
+              <span className="sr-only">Open menu</span>
+            </Button>
+
+            {/* Desktop search. On a phone it moves to its own row below. */}
+            <div className="relative hidden max-w-md flex-1 lg:block">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                className="h-9 w-full min-w-0 rounded-full border border-input bg-muted/40 px-2.5 py-1 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                placeholder="Search leads…"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  // Searching only makes sense on a lead list, so jump there.
+                  if (e.target.value && activeNav !== "Leads" && activeNav !== "Overview") setActiveNav("Leads")
+                }}
+              />
+            </div>
+
             <input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} />
-            {/* Opens the business-line choice first rather than the file picker:
-                which business a list belongs to cannot be recovered from the file
-                itself, so it has to be stated before the rows are imported. */}
-            <Button variant="outline" size="sm" disabled={isUploading} onClick={() => setUploadOpen(true)} className="px-2.5 sm:px-3">
-              <Upload data-icon="inline-start" />
-              <span className="hidden sm:inline">{isUploading ? "Uploading…" : "Import leads"}</span>
-            </Button>
-            {/* Sits beside Import on purpose: these are the two ways a lead gets
-                into the system, and calling one person should not require
-                building a file first. */}
-            <Button variant="outline" size="sm" onClick={() => setQuickCallOpen(true)} className="px-2.5 sm:px-3">
-              <PhoneForwarded data-icon="inline-start" />
-              <span className="hidden sm:inline">Call one person</span>
-            </Button>
-            <Button size="sm" onClick={() => setCampaignOpen(true)} className="px-2.5 sm:px-3">
-              <Phone data-icon="inline-start" />
-              <span className="hidden sm:inline">Start campaign</span>
-            </Button>
-            <Button variant="ghost" size="icon" onClick={refreshAll} aria-label="Refresh data" className="hidden sm:inline-flex">
-              <RefreshCw className={cn(leadsLoading && "animate-spin")} />
-            </Button>
-            {/* Ghost, beside the notification bell rather than in the primary
-                cluster: asking for feedback should be findable at any moment
-                without competing with the actions that actually run the
-                business. */}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setFeedbackOpen(true)}
-              className="px-2.5 sm:px-3"
-            >
-              <MessageSquare data-icon="inline-start" />
-              <span className="hidden sm:inline">Feedback</span>
-            </Button>
-            <div className="relative">
-              <Button variant="ghost" size="icon" onClick={() => setNotifOpen(true)}>
+
+            {/* ── Phone: balance, one actions menu, bell ─────────────────── */}
+            <div className="ml-auto flex min-w-0 items-center gap-1 lg:hidden">
+              <CreditsPill onTopUp={() => setTopUpOpen(true)} />
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button size="sm" className="shrink-0 px-2.5" />}>
+                  <Plus data-icon="inline-start" />
+                  New
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => setCampaignOpen(true)}>
+                    <Phone data-icon="inline-start" />
+                    Start campaign
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setQuickCallOpen(true)}>
+                    <PhoneForwarded data-icon="inline-start" />
+                    Call one person
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={isUploading} onClick={() => setUploadOpen(true)}>
+                    <Upload data-icon="inline-start" />
+                    {isUploading ? "Uploading…" : "Import leads"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={refreshAll}>
+                    <RefreshCw data-icon="inline-start" />
+                    Refresh
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
+                    <MessageSquare data-icon="inline-start" />
+                    Feedback
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button variant="ghost" size="icon" className="relative shrink-0" onClick={() => setNotifOpen(true)}>
                 <Bell />
                 {unreadCount > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
+                  <span className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
                     {unreadCount}
                   </span>
                 )}
                 <span className="sr-only">Notifications</span>
               </Button>
+            </div>
+
+            {/* ── Desktop: unchanged ─────────────────────────────────────── */}
+            <div className="ml-auto hidden items-center gap-2 lg:flex">
+              {/* Balance first in the cluster: it is the one number that changes
+                  what the other buttons cost, so it reads before them. */}
+              <CreditsPill onTopUp={() => setTopUpOpen(true)} />
+              {/* Opens the business-line choice first rather than the file picker:
+                  which business a list belongs to cannot be recovered from the file
+                  itself, so it has to be stated before the rows are imported. */}
+              <Button variant="outline" size="sm" disabled={isUploading} onClick={() => setUploadOpen(true)}>
+                <Upload data-icon="inline-start" />
+                {isUploading ? "Uploading…" : "Import leads"}
+              </Button>
+              {/* Sits beside Import on purpose: these are the two ways a lead gets
+                  into the system, and calling one person should not require
+                  building a file first. */}
+              <Button variant="outline" size="sm" onClick={() => setQuickCallOpen(true)}>
+                <PhoneForwarded data-icon="inline-start" />
+                Call one person
+              </Button>
+              <Button size="sm" onClick={() => setCampaignOpen(true)}>
+                <Phone data-icon="inline-start" />
+                Start campaign
+              </Button>
+              <Button variant="ghost" size="icon" onClick={refreshAll} aria-label="Refresh data">
+                <RefreshCw className={cn(leadsLoading && "animate-spin")} />
+              </Button>
+              {/* Ghost, beside the notification bell rather than in the primary
+                  cluster: asking for feedback should be findable at any moment
+                  without competing with the actions that actually run the
+                  business. */}
+              <Button variant="ghost" size="sm" onClick={() => setFeedbackOpen(true)}>
+                <MessageSquare data-icon="inline-start" />
+                Feedback
+              </Button>
+              <div className="relative">
+                <Button variant="ghost" size="icon" onClick={() => setNotifOpen(true)}>
+                  <Bell />
+                  {unreadCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
+                      {unreadCount}
+                    </span>
+                  )}
+                  <span className="sr-only">Notifications</span>
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Phone search, full width. A search box you cannot read what you
+              typed into is not a search box. */}
+          <div className="px-3 pb-2 lg:hidden">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                className="h-10 w-full min-w-0 rounded-full border border-input bg-muted/40 py-1 pl-9 pr-3 text-base outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                placeholder="Search leads…"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  if (e.target.value && activeNav !== "Leads" && activeNav !== "Overview") setActiveNav("Leads")
+                }}
+              />
             </div>
           </div>
         </header>
@@ -4312,7 +4897,9 @@ export function LeadCommandDashboard() {
         {/* Its own bar under the header rather than squeezed into the button
             cluster: it governs everything on the page below it, so it reads as
             a scope for the content, not as one more action. */}
-        <div className="sticky top-20 z-20 flex items-center gap-3 border-b border-border/70 bg-background/80 px-3 py-2 backdrop-blur-xl md:px-6">
+        {/* top- must track the header's real height, which is now two rows on a
+            phone (64px bar + 48px search) and one on desktop. */}
+        <div className="sticky top-[112px] z-20 flex items-center gap-3 border-b border-border/70 bg-background/80 px-3 py-2 backdrop-blur-xl md:px-6 lg:top-20">
           <span className="hidden shrink-0 text-xs font-medium text-muted-foreground sm:inline">Business line</span>
           <VerticalSwitch value={vertical} onChange={changeVertical} />
         </div>

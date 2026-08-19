@@ -4,6 +4,12 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * The container still scrolls horizontally as a last resort, but it should now
+ * almost never need to. See the note on TableCell: cells used to be
+ * `whitespace-nowrap` unconditionally, which set the table's minimum width to
+ * the sum of its longest cell in every column and guaranteed the scroll.
+ */
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
@@ -78,12 +84,28 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   )
 }
 
+/**
+ * Cells WRAP by default. They used to be `whitespace-nowrap` unconditionally,
+ * and that one word was the single biggest layout bug in the app.
+ *
+ * A no-wrap cell cannot be narrower than its longest unbroken content, so the
+ * table's minimum width became the sum of the widest cell in every column, and
+ * the container had no choice but to scroll. Measured before this change:
+ * Follow-ups rendered a 2,429px table inside a 1,044px laptop column — 1,400px
+ * of sideways scrolling — because its Notes column carried whole call logs. That
+ * column even had `line-clamp-1` on it, which could never take effect while the
+ * cell refused to wrap.
+ *
+ * Individual cells that genuinely must stay on one line (timestamps, phone
+ * numbers, currency, a row of badges) opt back in with `whitespace-nowrap`,
+ * which is the exception it should always have been.
+ */
 function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   return (
     <td
       data-slot="table-cell"
       className={cn(
-        "px-3 py-3.5 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        "px-3 py-3.5 align-middle [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
