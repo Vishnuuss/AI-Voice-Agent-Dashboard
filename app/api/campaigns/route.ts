@@ -3,7 +3,7 @@ import { createServerClient } from '@/lib/supabase-server';
 import { DograhApiError, DograhClient, DograhConfigError, dograh } from '@/lib/dograh';
 import { buildCampaignCsv } from '@/lib/csv-builder';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
-import { applyLeadSegmentFilter, isValidLeadSegment, segmentNoEligibleLeadsMessage, type LeadSegment } from '@/lib/lead-segments';
+import { applyLeadSegmentFilter, isValidLeadSegment, LEAD_SEGMENTS, segmentNoEligibleLeadsMessage, type LeadSegment } from '@/lib/lead-segments';
 import { getCallBehaviorSettings } from '@/lib/call-behavior';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { getBillingConfig, toCredits } from '@/lib/billing';
@@ -130,7 +130,13 @@ export async function POST(request: Request) {
     // request that omits it) behave exactly as before this was added.
     const rawSegment = body.lead_segment ?? 'new';
     if (!isValidLeadSegment(rawSegment)) {
-      return NextResponse.json({ error: `lead_segment must be one of: new, retry_pending, follow_up, follow_up_scheduled, unreachable` }, { status: 400 });
+      // Derived, not typed out: this list was already stale the moment a
+      // segment was added, and an error message that lies about what is
+      // accepted is worse than no message.
+      return NextResponse.json(
+        { error: `lead_segment must be one of: ${LEAD_SEGMENTS.map((s) => s.value).join(', ')}` },
+        { status: 400 },
+      );
     }
     const leadSegment = rawSegment as LeadSegment;
 

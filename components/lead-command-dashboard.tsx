@@ -3080,7 +3080,7 @@ function AIAgentPage({
               </label>
               <select
                 id="agent-language"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm sm:h-10"
                 value={form.language}
                 onChange={(e) => setForm({ ...form, language: e.target.value })}
               >
@@ -3095,7 +3095,7 @@ function AIAgentPage({
               </label>
               <select
                 id="agent-voice"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm sm:h-10"
                 value={form.voice}
                 onChange={(e) => setForm({ ...form, voice: e.target.value })}
               >
@@ -3340,7 +3340,7 @@ function SettingsPage({ health, onLogout }: { health: any; onLogout: () => void 
               </label>
               <select
                 id="timezone"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm sm:h-10"
                 value={workspace.timezone}
                 onChange={(e) => setWorkspace({ ...workspace, timezone: e.target.value })}
               >
@@ -5134,7 +5134,7 @@ export function LeadCommandDashboard() {
                   option is live and is exactly what the launch will claim. */}
               <select
                 id="campaign-segment"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm sm:h-10"
                 value={newCampaignSegment}
                 onChange={(e) => setNewCampaignSegment(e.target.value as LeadSegment)}
               >
@@ -5151,6 +5151,35 @@ export function LeadCommandDashboard() {
               <p className="text-xs text-muted-foreground">
                 {leadSegments.find((s) => s.value === newCampaignSegment)?.description ?? ""}
               </p>
+              {/* Said before the launch, not discovered afterwards on the bill.
+                  Most segments stop at the Max retries ceiling; these three do
+                  not, because they exist to reach people that ceiling has
+                  already excluded. That is the point of them and also the one
+                  thing about them that can cost real money unexpectedly. */}
+              {(() => {
+                const seg = leadSegments.find((s) => s.value === newCampaignSegment)
+                if (!seg?.bypassesRetryCap) return null
+                const over = seg.overCapCount ?? 0
+                return (
+                  <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-500">
+                    {over > 0 ? (
+                      <>
+                        <span className="font-medium">
+                          {over.toLocaleString("en-IN")} of these {seg.count.toLocaleString("en-IN")}
+                        </span>{" "}
+                        have already had their full <span className="font-medium">Max retries</span>. Launching this
+                        rings them again anyway — that is what this segment is for, but they are real, billed calls to
+                        people the automatic rotation had stopped dialling.
+                      </>
+                    ) : (
+                      <>
+                        This segment ignores the <span className="font-medium">Max retries</span> ceiling, so it can
+                        dial people the automatic rotation had stopped calling.
+                      </>
+                    )}
+                  </p>
+                )
+              })()}
               {/* A callback scheduled for next week is not "due" today, so this
                   segment is correctly 0 - but a bare 0 next to a sidebar badge
                   showing 1 looks broken. Say where the difference went. */}
@@ -5221,7 +5250,9 @@ export function LeadCommandDashboard() {
 
             <button
               type="button"
-              className="flex items-center gap-1 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
+              // -my-1.5 py-1.5 buys a 36px tap height without opening a gap in
+              // the form: as a bare text row this was 20px tall.
+              className="-my-1.5 flex min-h-9 items-center gap-1 py-1.5 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
               onClick={() => setShowAdvanced((v) => !v)}
             >
               <ChevronDown className={cn("size-4 transition-transform", showAdvanced && "rotate-180")} />

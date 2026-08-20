@@ -13,9 +13,22 @@
 
 import { applyVerticalFilter, type Vertical } from '@/lib/verticals';
 
-export type LeadSegment = 'new' | 'retry_pending' | 'follow_up' | 'follow_up_scheduled' | 'unreachable';
+export type LeadSegment =
+  | 'new'
+  | 'retry_pending'
+  | 'follow_up'
+  | 'follow_up_scheduled'
+  | 'unreachable'
+  | 'last_call_busy'
+  | 'last_call_failed';
 
-export const LEAD_SEGMENTS: { value: LeadSegment; label: string; description: string }[] = [
+export const LEAD_SEGMENTS: {
+  value: LeadSegment;
+  label: string;
+  description: string;
+  /** True when the segment deliberately ignores the Max retries ceiling. */
+  bypassesRetryCap?: boolean;
+}[] = [
   { value: 'new', label: 'New', description: 'Never called yet' },
   { value: 'retry_pending', label: 'Retry pending', description: 'No answer last time — due for another try' },
   { value: 'follow_up', label: 'Follow-ups due now', description: 'Asked for a callback on a date that has arrived' },
@@ -24,7 +37,40 @@ export const LEAD_SEGMENTS: { value: LeadSegment; label: string; description: st
     label: 'Follow-ups — all scheduled',
     description: 'Every booked callback, including ones due on a later date',
   },
-  { value: 'unreachable', label: 'Unreachable', description: 'Gave up after repeated no-answers — manual retry only' },
+  /*
+   * Two segments cut by WHY the last call did not connect.
+   *
+   * "Unreachable" already gathers everyone who ran out of retries, but it does
+   * it regardless of cause, and the causes are not equivalent. Someone whose
+   * line was BUSY has a working phone that was switched on and in use — the
+   * single best re-call cohort there is. Someone whose call FAILED never heard
+   * a ring at all: that outcome covers our own crashed pipeline and provider
+   * faults, so writing them off is writing off a lead we never actually tried.
+   * Lumping both in with people who are simply ignoring us wastes the first
+   * group and flatters the second.
+   *
+   * Both read `leads.call_outcome`, the outcome of the most recent call, which
+   * is written by the same webhook that writes call_logs. Verified against the
+   * newest call_log for every lead in the live database: 456 matched, 1 did not.
+   */
+  {
+    value: 'last_call_busy',
+    label: 'Line was busy',
+    description: 'Their phone was engaged — it is on and in use, so worth another try',
+    bypassesRetryCap: true,
+  },
+  {
+    value: 'last_call_failed',
+    label: 'Call failed (system error)',
+    description: 'A fault on our side or the network — they never actually got a ring',
+    bypassesRetryCap: true,
+  },
+  {
+    value: 'unreachable',
+    label: 'Unreachable',
+    description: 'Gave up after repeated no-answers — manual retry only',
+    bypassesRetryCap: true,
+  },
 ];
 
 export function isValidLeadSegment(value: unknown): value is LeadSegment {
@@ -102,6 +148,22 @@ export function applyLeadSegmentFilter(
      */
     case 'follow_up_scheduled':
       return query.not('follow_up_date', 'is', null).neq('status', 'queued');
+    /*
+     * Cut by the last outcome rather than by status, and deliberately NOT
+     * capped — same reasoning as `unreachable`, which these refine. Capping
+     * them would exclude the 69 leads that have already spent their quota,
+     * which is precisely the group this exists to reach; the segment would
+     * then quietly return a fraction of what its own label promises.
+     *
+     * `queued` is excluded because a lead being dialled right now must never be
+     * claimed twice. `retry_pending` leads are NOT excluded: a lead that is
+     * still in the automatic rotation can also be pulled forward by hand, and
+     * the launch route's claim is what actually prevents a double dial.
+     */
+    case 'last_call_busy':
+      return query.eq('call_outcome', 'busy').neq('status', 'queued');
+    case 'last_call_failed':
+      return query.in('call_outcome', ['failed', 'cancelled']).neq('status', 'queued');
     case 'unreachable':
       return query.in('status', ['no_answer', 'unreachable']);
     case 'new':

@@ -9,6 +9,14 @@ export interface LeadSegmentCount {
   label: string;
   description: string;
   count: number;
+  /** True when this segment deliberately ignores the Max retries ceiling, so
+   *  the launch dialog can warn before it dials someone the automatic rotation
+   *  had already stopped calling. */
+  bypassesRetryCap?: boolean;
+  /** Of `count`, how many have ALREADY had their full quota of calls. Only set
+   *  for cap-bypassing segments — it is the number that makes the warning a
+   *  decision rather than a disclaimer. */
+  overCapCount?: number;
 }
 
 /** Live counts behind the Start Campaign dialog's segment dropdown. */

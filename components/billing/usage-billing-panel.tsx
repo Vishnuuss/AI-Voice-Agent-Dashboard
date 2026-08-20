@@ -285,8 +285,15 @@ export function UsageBillingPanel({ onTopUp }: { onTopUp: () => void }) {
                           {formatWhen(e.created_at)}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Badge variant={e.amount_credits > 0 ? 'default' : 'outline'}>
+                          {/* Badge and description stack on a phone and sit on
+                              one line from `sm:` up. Side by side they set a
+                              floor on this column that pushed the table 60px
+                              wider than the card it lives in. */}
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                            <Badge
+                              variant={e.amount_credits > 0 ? 'default' : 'outline'}
+                              className="w-fit shrink-0"
+                            >
                               {e.label}
                             </Badge>
                             <span className="text-muted-foreground">{e.description}</span>

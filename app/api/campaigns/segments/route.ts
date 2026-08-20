@@ -34,7 +34,35 @@ export async function GET(request: Request) {
           console.error('[campaigns/segments] count failed for', segment.value, error);
           return { ...segment, count: 0 };
         }
-        return { ...segment, count: count ?? 0 };
+
+        /*
+         * For the segments that ignore Max retries, say HOW MANY people that
+         * actually affects.
+         *
+         * "May exceed your retry cap" is a sentence nobody weighs. On this
+         * database the Line-was-busy segment holds 108 leads against a cap of
+         * 2, and 59 of them have already had two or more calls — six have had
+         * six. Launching it rings those people a seventh time. That is a
+         * legitimate thing to choose, and an indefensible thing to choose by
+         * accident, so the number is put in front of the decision.
+         */
+        let overCap: number | undefined;
+        if (segment.bypassesRetryCap && Number.isFinite(maxRetries)) {
+          const { count: over } = await applyLeadSegmentFilter(
+            supabase
+              .from('leads')
+              .select('id', { count: 'exact', head: true })
+              .not('phone', 'is', null)
+              .gte('retry_count', Math.max(0, maxRetries)),
+            segment.value,
+            callGapMinutes,
+            vertical,
+            maxRetries,
+          );
+          overCap = over ?? 0;
+        }
+
+        return { ...segment, count: count ?? 0, overCapCount: overCap };
       }),
     );
 
