@@ -393,9 +393,11 @@ const DELETABLE_CAMPAIGN_STATUSES = ['completed', 'failed', 'cancelled'];
  * it. The restriction is applied inside the query, so a protected campaign is
  * never re-fetched and the paging loop terminates.
  *
- * `leads.campaign_run_id` and `call_logs.campaign_run_id` are both ON DELETE SET
- * NULL, so deleting a campaign quietly detaches its leads and calls. Those ids
- * are recorded on the trash row so a restore can reattach them.
+ * `leads.campaign_run_id` and `call_logs.campaign_run_id` are declared ON DELETE
+ * SET NULL in scripts/001_init_schema.sql, but the LIVE database has them as
+ * RESTRICT — so this does NOT rely on the constraint. Both are nulled out
+ * explicitly before the campaign row goes (see the note at the delete itself).
+ * The detached ids are recorded on the trash row so a restore can reattach them.
  */
 export async function deleteCampaigns(
   supabase: Db,
@@ -468,6 +470,40 @@ export async function deleteCampaigns(
         })),
       );
       if (trashError) throw new Error(`Could not archive the campaigns: ${trashError.message}`);
+
+      /*
+       * Detach the children BEFORE deleting the parent.
+       *
+       * This code was written expecting `leads.campaign_run_id` and
+       * `call_logs.campaign_run_id` to be ON DELETE SET NULL — which is exactly
+       * what scripts/001_init_schema.sql declares. The LIVE database does not
+       * match that file: both constraints are RESTRICT, so Postgres refused
+       * every delete with
+       *   23503 ... violates foreign key constraint "leads_campaign_run_id_fkey"
+       * and campaign deletion could never work for any campaign that had ever
+       * dialled anyone — which is all of them.
+       *
+       * Nulling the references here rather than fixing the constraint keeps
+       * this working under EITHER schema, needs no hand-run migration on a live
+       * database, and makes the archive/restore pair explicit: the ids were
+       * captured into relink_lead_ids/relink_call_ids just above, and
+       * restoreBatch puts them back.
+       *
+       * Leads first: a lead is what the client sees, and if the sweep dies
+       * halfway a detached call log is invisible while a detached lead is not.
+       */
+      for (const [table, column] of [
+        ['leads', 'campaign_run_id'],
+        ['call_logs', 'campaign_run_id'],
+      ] as const) {
+        const { error: detachError } = await supabase
+          .from(table)
+          .update({ [column]: null })
+          .in(column, chunkIds);
+        if (detachError) {
+          throw new Error(`Could not detach ${table} from the campaigns: ${detachError.message}`);
+        }
+      }
 
       const { error: delError } = await supabase.from('campaign_runs').delete().in('id', chunkIds);
       if (delError) throw new Error(`Could not delete the campaigns: ${delError.message}`);
@@ -627,7 +663,9 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
       skipped += res.failed;
       if (res.error) insertError = insertError ?? res.error;
 
-      // Reattach the leads and calls that were cut loose by ON DELETE SET NULL.
+      // Reattach the leads and calls that deleteCampaigns detached. It nulls
+      // those references explicitly (the live FK is RESTRICT, not SET NULL), so
+      // this is the other half of that pair.
       for (const r of chunk) {
         const leadIds = (r.relink_lead_ids || []) as string[];
         const callIds = (r.relink_call_ids || []) as string[];

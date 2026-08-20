@@ -273,7 +273,21 @@ export function QuickCallDialog({
   }, [phone, vertical])
 
   const existing = lookup?.found ? lookup.lead : null
-  const canCall = !!vertical && phone.trim().length >= 10 && !isCalling
+  /*
+   * A NEW lead needs a name; an existing one already has one.
+   *
+   * `leads.name` is NOT NULL in the live database, so submitting this form with
+   * the name blank failed the insert and surfaced as "Could not save this person
+   * as a lead" — the field said Optional and the database disagreed.
+   *
+   * Required rather than defaulted, because the name is not decoration: it is
+   * sent to the agent as `customer_name` and spoken in the greeting. Filling it
+   * with the phone number would have the agent greet someone as
+   * "+91 63024 88456 garu" on a real call.
+   */
+  const needsName = !existing
+  const canCall =
+    !!vertical && phone.trim().length >= 10 && (!needsName || name.trim().length > 0) && !isCalling
 
   const placeCall = useCallback(async () => {
     if (!canCall) return
@@ -282,7 +296,7 @@ export function QuickCallDialog({
       const res = await fetch("/api/calls/single", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ phone, vertical, name: name || undefined, city: city || undefined }),
+        body: JSON.stringify({ phone, vertical, name: name.trim() || undefined, city: city.trim() || undefined }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Could not place the call (${res.status})`)
@@ -369,14 +383,20 @@ export function QuickCallDialog({
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="grid gap-2">
               <label className="text-sm font-medium" htmlFor="quick-name">
-                Name
+                Name {needsName && <span className="text-destructive">*</span>}
               </label>
               <Input
                 id="quick-name"
-                placeholder="Optional"
+                placeholder={needsName ? "Required" : "Optional"}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                aria-required={needsName}
               />
+              {needsName && (
+                <p className="text-xs text-muted-foreground">
+                  The agent greets them by name, so this is spoken on the call.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <label className="text-sm font-medium" htmlFor="quick-city">

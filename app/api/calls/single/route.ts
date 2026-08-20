@@ -127,10 +127,24 @@ export async function POST(request: Request) {
           if (updated) lead = updated;
         }
       } else {
+        /*
+         * A new lead must carry a name. `leads.name` is NOT NULL in the live
+         * database, and the name is also sent to the agent as `customer_name`
+         * and spoken in the greeting — so it is refused here explicitly rather
+         * than left to fail as a constraint violation reported as a 500.
+         */
+        const providedName = body.name ? String(body.name).trim().slice(0, 200) : '';
+        if (!providedName) {
+          return NextResponse.json(
+            { error: 'A name is required — the agent greets them by name on the call.' },
+            { status: 400 },
+          );
+        }
+
         const { data: created, error: createError } = await supabase
           .from('leads')
           .insert({
-            name: body.name ? String(body.name).slice(0, 200) : null,
+            name: providedName,
             phone,
             city: body.city ? String(body.city).slice(0, 120) : null,
             vertical,
@@ -144,7 +158,17 @@ export async function POST(request: Request) {
 
         if (createError || !created) {
           console.error('[calls:single] could not create lead', createError);
-          return NextResponse.json({ error: 'Could not save this person as a lead.' }, { status: 500 });
+          // The database's own words. The generic message sent every failure —
+          // a duplicate, a missing column, a constraint — to the same dead end
+          // with nothing to act on.
+          return NextResponse.json(
+            {
+              error: createError?.message
+                ? `Could not save this person as a lead: ${createError.message}`
+                : 'Could not save this person as a lead.',
+            },
+            { status: 500 },
+          );
         }
         lead = created;
       }
