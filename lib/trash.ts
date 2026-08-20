@@ -736,19 +736,97 @@ export async function restoreBatch(supabase: Db, batchId: string): Promise<Resto
 // ─── Purge ───────────────────────────────────────────────────────────────────
 
 /**
+ * How many archived rows in this batch are NOT currently live.
+ *
+ * This is the only trustworthy answer to "is it safe to throw the archive
+ * away?", and `restored_at` is not that answer. A restore is per-row and is
+ * allowed to partially succeed: restore 4 leads, have 1 rejected because its
+ * phone number was re-uploaded on that business line since, and the batch is
+ * still stamped restored because 3 did come back. For that 1 lead the archived
+ * copy is then the ONLY copy in existence.
+ *
+ * Measured against the live tables rather than stored on the batch, so it stays
+ * correct when a restored row is deleted again afterwards.
+ */
+export async function outstandingRows(supabase: Db, batchId: string): Promise<number> {
+  let outstanding = 0;
+
+  for (const [trashTable, liveTable] of [
+    ['leads_trash', 'leads'],
+    ['call_logs_trash', 'call_logs'],
+    ['campaign_runs_trash', 'campaign_runs'],
+  ] as const) {
+    const { data: archived } = await supabase.from(trashTable).select('id').eq('batch_id', batchId);
+    const ids = (archived ?? []).map((r: any) => r.id as string);
+    if (!ids.length) continue;
+
+    const live = await existingIds(supabase, liveTable, ids);
+    outstanding += ids.filter((id) => !live.has(id)).length;
+  }
+
+  return outstanding;
+}
+
+/**
  * Permanent deletion. Removing the batch row is enough: all three `*_trash`
  * tables reference it ON DELETE CASCADE, so the archived rows go with it.
+ *
+ * REFUSES by default while the batch still holds rows that are not live, even
+ * when the batch is stamped restored — see outstandingRows. Destroying the last
+ * copy of a record is exactly the outcome this whole feature exists to prevent,
+ * and the caller that asks for it is usually acting on a stale "already put
+ * back" label. `force` is for a caller that has been told the real number and
+ * still means it.
  */
-export async function purgeBatch(supabase: Db, batchId: string): Promise<void> {
+export async function purgeBatch(
+  supabase: Db,
+  batchId: string,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  if (!opts.force) {
+    const outstanding = await outstandingRows(supabase, batchId);
+    if (outstanding > 0) {
+      throw new PurgeWouldLoseDataError(outstanding);
+    }
+  }
+
   const { error } = await supabase.from('trash_batches').delete().eq('id', batchId);
   if (error) throw new Error(`Could not empty that Recycle Bin entry: ${error.message}`);
 }
 
-/** Every batch, restored or not. Used by "Empty bin". */
-export async function purgeAll(supabase: Db): Promise<number> {
+/** Thrown when a purge would destroy the last copy of a record. */
+export class PurgeWouldLoseDataError extends Error {
+  constructor(public readonly outstanding: number) {
+    super(
+      `${outstanding.toLocaleString('en-IN')} record${outstanding === 1 ? '' : 's'} in this entry ` +
+        `${outstanding === 1 ? 'is' : 'are'} not in your live data — this is the only copy. ` +
+        `Deleting it cannot be undone.`,
+    );
+    this.name = 'PurgeWouldLoseDataError';
+  }
+}
+
+/**
+ * "Empty bin" — every batch. The widest-reaching destructive action in the app.
+ *
+ * Returns what it destroyed AND what it would destroy, so the route can refuse
+ * a first attempt that would take the last copy of live-missing records with it.
+ * Without `force` this counts first and deletes nothing if anything is owing.
+ */
+export async function purgeAll(
+  supabase: Db,
+  opts: { force?: boolean } = {},
+): Promise<{ purged: number; outstanding: number }> {
+  if (!opts.force) {
+    const { data: all } = await supabase.from('trash_batches').select('id').limit(500);
+    let outstanding = 0;
+    for (const batch of all ?? []) outstanding += await outstandingRows(supabase, batch.id);
+    if (outstanding > 0) return { purged: 0, outstanding };
+  }
+
   const { data, error } = await supabase.from('trash_batches').delete().not('id', 'is', null).select('id');
   if (error) throw new Error(`Could not empty the Recycle Bin: ${error.message}`);
-  return data?.length || 0;
+  return { purged: data?.length || 0, outstanding: 0 };
 }
 
 /**
@@ -760,15 +838,57 @@ export async function purgeAll(supabase: Db): Promise<number> {
  * of the feature, which is that the database stops growing.
  */
 export async function purgeExpired(supabase: Db): Promise<number> {
-  const { data, error } = await supabase
+  const now = new Date().toISOString();
+
+  // Batches past their retention window go unconditionally: seven days is the
+  // promise the bin makes, and a row that has run out its clock has had its
+  // chance. This is the one deletion the client has actually been told about.
+  const { data: expired, error: expiredError } = await supabase
     .from('trash_batches')
     .delete()
-    .or(`purge_after.lte.${new Date().toISOString()},restored_at.not.is.null`)
+    .lte('purge_after', now)
     .select('id');
 
-  if (error) {
-    console.error('[trash:purgeExpired] failed', error);
-    return 0;
+  if (expiredError) console.error('[trash:purgeExpired] expiry sweep failed', expiredError);
+
+  /*
+   * Restored batches are swept only once NOTHING is left owing.
+   *
+   * This used to delete every batch with a `restored_at`, on the reasoning that
+   * archived copies of live rows are dead weight. True — but a restore is
+   * per-row and may partially succeed, and the batch is stamped restored if even
+   * one row came back. Any row that did NOT come back exists only in the
+   * archive, so the old sweep permanently destroyed it within ten minutes, with
+   * no human involved and nothing reported. That is the worst possible failure
+   * for a Recycle Bin, and it ran on a cron.
+   *
+   * Checked per batch against the live tables. The candidate list is small — a
+   * batch appears here at most once, because a clean one is deleted on the spot.
+   */
+  const { data: restored, error: restoredError } = await supabase
+    .from('trash_batches')
+    .select('id')
+    .not('restored_at', 'is', null)
+    .gt('purge_after', now)
+    .limit(200);
+
+  if (restoredError) console.error('[trash:purgeExpired] restored sweep failed', restoredError);
+
+  let sweptRestored = 0;
+  for (const batch of restored ?? []) {
+    const outstanding = await outstandingRows(supabase, batch.id);
+    if (outstanding > 0) {
+      // Left in the bin on purpose, and left restorable: these rows are still
+      // only in the archive, so the client can try the restore again once the
+      // collision that blocked them is cleared.
+      console.warn(
+        `[trash:purgeExpired] keeping batch ${batch.id}: ${outstanding} row(s) never made it back`,
+      );
+      continue;
+    }
+    const { error } = await supabase.from('trash_batches').delete().eq('id', batch.id);
+    if (!error) sweptRestored += 1;
   }
-  return data?.length || 0;
+
+  return (expired?.length || 0) + sweptRestored;
 }

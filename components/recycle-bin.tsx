@@ -31,6 +31,10 @@ interface TrashBatch {
   restored_at: string | null
   /** Up to three names from a lead batch, so a row can say WHO. */
   sample?: string[] | null
+  /** Rows in this entry that are NOT in the live tables. For a restored entry
+   *  this is normally 0; anything higher means the restore only partly worked
+   *  and this archive is the last copy of the difference. */
+  outstanding?: number
 }
 
 /**
@@ -134,23 +138,34 @@ export function RecycleBinPage() {
   }
 
   async function purge(batch: TrashBatch) {
-    // Two different actions wearing one label. On a batch that was PUT BACK, the
-    // live rows are already in the client's list and this only discards the
-    // leftover archived copy — warning them about permanent data loss there is
-    // simply false, and false alarms are how real ones stop being read.
-    const message = batch.restored_at
-      ? "Remove this entry from the Recycle bin?\n\nThe records themselves were already put back and are not affected."
-      : `Permanently delete ${batch.row_count.toLocaleString("en-IN")} rows? This cannot be undone.`
+    /*
+     * Three different actions wearing one label, and getting this wrong destroys
+     * data. `restored_at` alone is NOT permission to reassure: a restore is
+     * per-row and may partly fail, and the rows that failed exist only in this
+     * archive. Saying "already put back and not affected" over those is a lie
+     * that ends in permanent loss, so the wording follows `outstanding` - the
+     * server's count of what is genuinely not in the live tables.
+     */
+    const outstanding = batch.outstanding ?? (batch.restored_at ? 0 : batch.row_count)
+    const message =
+      outstanding === 0
+        ? "Remove this entry from the Recycle bin?\n\nEvery record in it is already back in your live data, so nothing is lost."
+        : batch.restored_at
+          ? `${outstanding.toLocaleString("en-IN")} record(s) in this entry never made it back into your live data. ` +
+            `This is the ONLY copy of them.\n\nDelete permanently? This cannot be undone.`
+          : `Permanently delete ${batch.row_count.toLocaleString("en-IN")} rows? This cannot be undone.`
     if (!window.confirm(message)) return
+
     setBusyId(batch.id)
     try {
-      const res = await fetch(`/api/trash/${batch.id}`, { method: "DELETE" })
+      // force only after the client has been shown the real number above.
+      const res = await fetch(`/api/trash/${batch.id}?force=1`, { method: "DELETE" })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         toast.error(data.error || "Could not empty that entry.")
         return
       }
-      toast.success(batch.restored_at ? "Entry removed from the bin." : "Permanently deleted.")
+      toast.success(outstanding === 0 ? "Entry removed from the bin." : "Permanently deleted.")
       load()
     } finally {
       setBusyId(null)
@@ -159,8 +174,20 @@ export function RecycleBinPage() {
 
   async function emptyAll() {
     if (!window.confirm("Permanently delete everything in the Recycle bin? This cannot be undone.")) return
-    const res = await fetch("/api/trash?confirm=empty", { method: "DELETE" })
-    const data = await res.json().catch(() => ({}))
+
+    // First attempt is UNFORCED. The server counts what is missing from the live
+    // tables and refuses with a 409 rather than trusting this list, which may
+    // have been loaded minutes ago - the browser is the wrong place to decide
+    // whether something is the last copy of a record.
+    let res = await fetch("/api/trash?confirm=empty", { method: "DELETE" })
+    let data = await res.json().catch(() => ({}))
+
+    if (res.status === 409 && data.needsForce) {
+      if (!window.confirm(`${data.error}\n\nEmptying the bin destroys them permanently. Continue?`)) return
+      res = await fetch("/api/trash?confirm=empty&force=1", { method: "DELETE" })
+      data = await res.json().catch(() => ({}))
+    }
+
     if (!res.ok) {
       toast.error(data.error || "Could not empty the Recycle bin.")
       return
@@ -251,8 +278,16 @@ export function RecycleBinPage() {
                         </p>
                       </div>
                       {batch.restored_at ? (
-                        <Badge variant="outline" className="border-transparent bg-emerald-500/10 text-emerald-600">
-                          Put back
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "shrink-0 border-transparent",
+                            (batch.outstanding ?? 0) > 0
+                              ? "bg-amber-500/10 text-amber-600"
+                              : "bg-emerald-500/10 text-emerald-600",
+                          )}
+                        >
+                          {(batch.outstanding ?? 0) > 0 ? "Partly put back" : "Put back"}
                         </Badge>
                       ) : null}
                     </div>
@@ -260,12 +295,18 @@ export function RecycleBinPage() {
                     {/* Said outright. A restored row that still sits in a list
                         headed "Recycle bin" reads as deleted, and the client has
                         no way to tell that the data is already back. */}
-                    {batch.restored_at && (
-                      <p className="text-xs text-muted-foreground">
-                        Already back in your {meta?.label.toLowerCase() ?? "records"} — nothing here is deleted.
-                        This is just the leftover copy.
-                      </p>
-                    )}
+                    {batch.restored_at &&
+                      ((batch.outstanding ?? 0) > 0 ? (
+                        <p className="text-xs font-medium text-amber-600">
+                          {batch.outstanding!.toLocaleString("en-IN")} of these never made it back into your{" "}
+                          {meta?.label.toLowerCase() ?? "records"}. This is the only copy — do not delete it.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Already back in your {meta?.label.toLowerCase() ?? "records"} — nothing here is deleted.
+                          This is just the leftover copy.
+                        </p>
+                      ))}
 
                     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span className="font-mono">{batch.row_count.toLocaleString("en-IN")} rows</span>
@@ -289,7 +330,7 @@ export function RecycleBinPage() {
                         onClick={() => purge(batch)}
                       >
                         <Trash2 data-icon="inline-start" />
-                        {batch.restored_at ? "Remove this entry" : "Delete forever"}
+                        {batch.restored_at && (batch.outstanding ?? 0) === 0 ? "Remove this entry" : "Delete forever"}
                       </Button>
                     </div>
                   </div>
@@ -348,15 +389,28 @@ export function RecycleBinPage() {
                       <TableCell>
                         {batch.restored_at ? (
                           <div className="flex flex-col gap-0.5">
+                            {/* "Put back" is only the whole truth when NOTHING is
+                                outstanding. A restore is per-row and can partly
+                                fail; the rows that failed are still only in this
+                                archive, and calling that "already in your list"
+                                is what makes deleting it feel safe when it is
+                                the opposite. */}
                             <Badge
                               variant="outline"
-                              className="w-fit border-transparent bg-emerald-500/10 text-emerald-600"
+                              className={cn(
+                                "w-fit border-transparent",
+                                (batch.outstanding ?? 0) > 0
+                                  ? "bg-amber-500/10 text-amber-600"
+                                  : "bg-emerald-500/10 text-emerald-600",
+                              )}
                             >
-                              Put back
+                              {(batch.outstanding ?? 0) > 0 ? "Partly put back" : "Put back"}
                             </Badge>
-                            {/* Without this the row is indistinguishable from a
-                                deleted one, on a page titled "Recycle bin". */}
-                            <span className="text-xs text-muted-foreground">Already in your list</span>
+                            <span className="text-xs text-muted-foreground">
+                              {(batch.outstanding ?? 0) > 0
+                                ? `${batch.outstanding!.toLocaleString("en-IN")} never came back — only copy`
+                                : "Already in your list"}
+                            </span>
                           </div>
                         ) : (
                           <span className="text-sm text-muted-foreground">{timeLeft(batch.purge_after)}</span>
@@ -383,7 +437,7 @@ export function RecycleBinPage() {
                             onClick={() => purge(batch)}
                           >
                             <Trash2 data-icon="inline-start" />
-                            {batch.restored_at ? "Remove this entry" : "Delete forever"}
+                            {batch.restored_at && (batch.outstanding ?? 0) === 0 ? "Remove this entry" : "Delete forever"}
                           </Button>
                         </div>
                       </TableCell>

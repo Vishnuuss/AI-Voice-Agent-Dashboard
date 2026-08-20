@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient, isMissingTableError } from '@/lib/supabase-server';
-import { purgeAll, RETENTION_DAYS } from '@/lib/trash';
+import { outstandingRows, purgeAll, RETENTION_DAYS } from '@/lib/trash';
 
 /**
  * The Recycle Bin listing.
@@ -80,9 +80,31 @@ export async function GET(request: Request) {
       }
     }
 
+    /*
+     * How many rows in each RESTORED batch never actually made it back.
+     *
+     * `restored_at` only means "at least one row returned". A restore is per-row
+     * and may partially fail, and for the rows that failed the archive is the
+     * only copy left. Without this number the bin labels such a batch "Put back
+     * / Already in your list" and offers to throw it away — which is precisely
+     * how a Recycle Bin ends up destroying the record it was protecting.
+     *
+     * Only for restored batches: an un-restored batch is outstanding by
+     * definition, and this costs a query per batch.
+     */
+    const outstanding = new Map<string, number>();
+    for (const batch of batches) {
+      if (!batch.restored_at) continue;
+      outstanding.set(batch.id, await outstandingRows(supabase, batch.id));
+    }
+
     const total = count || 0;
     return NextResponse.json({
-      batches: batches.map((b) => ({ ...b, sample: samples.get(b.id)?.names ?? null })),
+      batches: batches.map((b) => ({
+        ...b,
+        sample: samples.get(b.id)?.names ?? null,
+        outstanding: b.restored_at ? (outstanding.get(b.id) ?? 0) : b.row_count + b.cascaded_count,
+      })),
       retentionDays: RETENTION_DAYS,
       totalCount: total,
       totalPages: total ? Math.ceil(total / limit) : 0,
@@ -107,7 +129,25 @@ export async function DELETE(request: Request) {
     }
 
     const supabase = createServerClient();
-    const purged = await purgeAll(supabase);
+    const force = searchParams.get('force') === '1';
+    const { purged, outstanding } = await purgeAll(supabase, { force });
+
+    // Nothing was deleted: the bin still holds records that are not in the live
+    // tables, so emptying it would destroy the only copy. Report the number and
+    // make the client ask again with ?force=1.
+    if (outstanding > 0) {
+      return NextResponse.json(
+        {
+          error:
+            `${outstanding.toLocaleString('en-IN')} record${outstanding === 1 ? '' : 's'} in the bin ` +
+            `${outstanding === 1 ? 'is' : 'are'} not in your live data — this is the only copy.`,
+          outstanding,
+          needsForce: true,
+        },
+        { status: 409 },
+      );
+    }
+
     return NextResponse.json({ purged, success: true });
   } catch (error: any) {
     console.error('[trash:DELETE] unexpected', error);
