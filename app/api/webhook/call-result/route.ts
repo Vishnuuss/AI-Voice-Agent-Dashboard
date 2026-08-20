@@ -361,7 +361,27 @@ export async function POST(request: Request) {
     // real conversation. A lead that has never been scored still gets its first
     // score so nothing is left blank.
     const carriesSignal = hasQualificationSignal(signals);
-    const neverScored = lead.score === null || lead.score === undefined;
+    // "Has this lead ever been scored?" — read off qual_data, NOT off score.
+    //
+    // score was the obvious flag and it was the wrong one: leads are created by
+    // the n8n import, which writes score = 0 rather than leaving it null, so
+    // `score === null` was false for all 467 leads in the database and this
+    // whole branch had never once run. The visible symptom was a call that
+    // connects, gets scored 25 ("talked but gave no usable answers") and carries
+    // no extractable signal — the score reached call_logs.gathered_context and
+    // the lead stayed at 0 with an empty qual_data, so the one bucket the client
+    // is meant to ring back was invisible to them.
+    //
+    // qual_data is written on this exact branch and nowhere else, which makes
+    // empty qual_data a faithful "never scored". It is also strictly safer than
+    // treating score 0 as unscored: a lead legitimately scored 0 ("not
+    // interested", "rented house") has a populated qual_data, so a later empty
+    // call still cannot overwrite a real refusal.
+    const neverScored =
+      lead.score === null ||
+      lead.score === undefined ||
+      !lead.qual_data ||
+      Object.keys(lead.qual_data).length === 0;
 
     if (result.answered && (carriesSignal || neverScored)) {
       update.score = result.score;

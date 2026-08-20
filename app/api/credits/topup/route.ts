@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { getBillingConfig, gstOn, GST_RATE_PERCENT } from '@/lib/billing';
+import {
+  TOPUP_SELECT_FULL,
+  TOPUP_SELECT_LEGACY,
+  isMissingGstColumn,
+  topupInsert,
+  warnMissingGstColumns,
+  withDerivedGst,
+} from '@/lib/topup-columns';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,12 +46,28 @@ export async function GET() {
       .eq('id', 'default')
       .single();
 
-    const { data: requests, error } = await billing
-      .from('topup_requests')
-      .select('id, credits_requested, base_amount_inr, gst_rate_percent, gst_amount_inr, amount_inr, status, reference_note, requested_at, decided_at, decision_note')
-      .eq('account_id', 'default')
-      .order('requested_at', { ascending: false })
-      .limit(10);
+    // Typed loosely on purpose: supabase-js parses the select string at the TYPE
+    // level, so passing it as a variable makes it infer ParserError. The shape is
+    // pinned by TOPUP_SELECT_* instead.
+    const recentRequests = async (select: string): Promise<{ data: any[] | null; error: any }> =>
+      billing
+        .from('topup_requests')
+        .select(select)
+        .eq('account_id', 'default')
+        .order('requested_at', { ascending: false })
+        .limit(10);
+
+    let { data: requests, error } = await recentRequests(TOPUP_SELECT_FULL);
+
+    // 004_gst_on_topups.sql may not have been run yet. Serve the request history
+    // in its pre-GST shape rather than failing the whole dialog — see
+    // lib/topup-columns.ts.
+    if (isMissingGstColumn(error)) {
+      warnMissingGstColumns('api/credits/topup');
+      const legacy = await recentRequests(TOPUP_SELECT_LEGACY);
+      error = legacy.error;
+      requests = legacy.data?.map(withDerivedGst) ?? null;
+    }
 
     if (error) throw new Error(error.message);
 
@@ -106,21 +130,33 @@ export async function POST(request: Request) {
     // because tax is not calling time.
     const gst = gstOn(credits);
 
-    const { data, error } = await billing
-      .from('topup_requests')
-      .insert({
-        account_id: config.accountId,
-        credits_requested: credits,
-        base_amount_inr: gst.baseInr,
-        gst_rate_percent: gst.gstRatePercent,
-        gst_amount_inr: gst.gstInr,
-        amount_inr: gst.totalInr,
-        status: 'pending',
-        method: 'manual_upi',
-        reference_note: note,
-      })
-      .select('id, credits_requested, base_amount_inr, gst_rate_percent, gst_amount_inr, amount_inr, status, requested_at')
-      .single();
+    const baseRow = {
+      account_id: config.accountId,
+      credits_requested: credits,
+      status: 'pending',
+      method: 'manual_upi',
+      reference_note: note,
+    };
+
+    const fileRequest = async (withGst: boolean): Promise<{ data: any; error: any }> =>
+      billing
+        .from('topup_requests')
+        .insert(topupInsert(baseRow, gst, withGst))
+        .select(withGst ? TOPUP_SELECT_FULL : TOPUP_SELECT_LEGACY)
+        .single();
+
+    let { data, error } = await fileRequest(true);
+
+    // Without this the client simply could not buy credits while 004 was
+    // unapplied — the insert named three columns that did not exist. The row
+    // still records the gross the client is asked to pay, so an operator
+    // approving it credits the right number and collects the right amount.
+    if (isMissingGstColumn(error)) {
+      warnMissingGstColumns('api/credits/topup');
+      const legacy = await fileRequest(false);
+      error = legacy.error;
+      data = legacy.data ? withDerivedGst(legacy.data) : null;
+    }
 
     if (error) throw new Error(error.message);
 
