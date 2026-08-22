@@ -142,10 +142,25 @@ export async function deleteLeads(
 
       const chunkIds = rows.map((r: any) => r.id as string);
 
-      // Archive the call logs FIRST. `call_logs.lead_id` is ON DELETE CASCADE,
-      // so the moment the lead goes its entire call history - recordings,
-      // transcripts, scores - is destroyed by the database with no way back.
-      // Capturing them here is what turns that silent loss into a restore.
+      // Archive the call logs FIRST, then delete them explicitly below.
+      //
+      // This used to archive them and stop there, on the stated grounds that
+      // `call_logs.lead_id` is ON DELETE CASCADE and the database would clear
+      // them out. 001_init_schema.sql does declare the cascade — but the LIVE
+      // database does not have it, and deleting a lead failed outright:
+      //
+      //   update or delete on table "leads" violates foreign key constraint
+      //   "call_logs_lead_id_fkey" on table "call_logs"
+      //
+      // So deleting any lead that had ever been called returned a 500, which is
+      // every lead the client actually works with. It escaped notice because a
+      // lead with NO call history has nothing pointing at it and deletes fine —
+      // which is exactly what a freshly-created throwaway test row is.
+      //
+      // Clearing the children here rather than re-declaring the constraint is
+      // deliberate: it works whether or not the cascade is present, it matches
+      // what deleteCampaigns already does for its own dependants, and it needs
+      // no migration to be run before deletes start working again.
       const { data: calls, error: callsError } = await supabase
         .from('call_logs')
         .select('*')
@@ -182,6 +197,19 @@ export async function deleteLeads(
         })),
       );
       if (trashError) throw new Error(`Could not archive the leads: ${trashError.message}`);
+
+      // Clear the children before the parent. Keyed on lead_id rather than on
+      // the ids just archived, because anything that arrived in between is
+      // still a row pointing at this lead and would block the delete all over
+      // again. A call landing inside that window is deleted without an archive
+      // copy — a narrow race, and the alternative is the delete failing.
+      const { error: callDelError } = await supabase
+        .from('call_logs')
+        .delete()
+        .in('lead_id', chunkIds);
+      if (callDelError) {
+        throw new Error(`Could not clear the call history before deleting: ${callDelError.message}`);
+      }
 
       const { error: delError } = await supabase.from('leads').delete().in('id', chunkIds);
       if (delError) throw new Error(`Could not delete the leads: ${delError.message}`);

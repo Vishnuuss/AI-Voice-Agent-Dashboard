@@ -47,6 +47,21 @@ const NOUNS: Record<BulkDeleteEntity, { one: string; many: string }> = {
 
 type Mode = "ids" | "filter" | "all"
 
+/**
+ * "1 call log went with it" / "12 call logs went with them".
+ *
+ * Both halves have to agree with their own count: the noun with how many call
+ * logs were swept, and "it"/"them" with how many parents were deleted. Written
+ * out once here because the same sentence appears in the delete toast and twice
+ * in the Recycle bin, and it read "1 call logs went with them" in all three.
+ */
+export function cascadedPhrase(cascaded: number, parents: number): string {
+  return (
+    `${cascaded.toLocaleString("en-IN")} call log${cascaded === 1 ? "" : "s"} ` +
+    `went with ${parents === 1 ? "it" : "them"}`
+  )
+}
+
 interface Preview {
   count: number
   filterLabel: string
@@ -462,7 +477,7 @@ function BulkDeleteDialog({
       const parts = [
         `${deletedCount.toLocaleString("en-IN")} ${deletedCount === 1 ? noun.one : noun.many} moved to the Recycle Bin`,
       ]
-      if (data.cascaded) parts.push(`${data.cascaded.toLocaleString("en-IN")} call logs went with them`)
+      if (data.cascaded) parts.push(cascadedPhrase(data.cascaded, deletedCount))
       if (data.skipped) parts.push(`${data.skipped.toLocaleString("en-IN")} skipped (${data.skippedReason})`)
       if (data.capped) parts.push(`stopped at ${preview?.maxPerDelete?.toLocaleString("en-IN")} — run it again for the rest`)
 

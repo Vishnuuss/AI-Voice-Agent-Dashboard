@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Megaphone, PhoneCall, RefreshCw, RotateCcw, Trash2, Users } from "lucide-react"
+import { cascadedPhrase } from "@/components/bulk-delete"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -273,7 +274,7 @@ export function RecycleBinPage() {
                         <p className="text-xs text-muted-foreground">
                           {batch.row_count.toLocaleString("en-IN")} {meta?.label.toLowerCase() ?? "rows"}
                           {batch.cascaded_count > 0
-                            ? ` · ${batch.cascaded_count.toLocaleString("en-IN")} call logs went with them`
+                            ? ` · ${cascadedPhrase(batch.cascaded_count, batch.row_count)}`
                             : ""}
                         </p>
                       </div>
@@ -377,7 +378,7 @@ export function RecycleBinPage() {
                             <p className="text-xs text-muted-foreground">
                               {batch.sample?.length ? `${batch.filter_label}` : meta?.label}
                               {batch.cascaded_count > 0
-                                ? ` · ${batch.cascaded_count.toLocaleString("en-IN")} call logs went with them`
+                                ? ` · ${cascadedPhrase(batch.cascaded_count, batch.row_count)}`
                                 : ""}
                             </p>
                           </div>
