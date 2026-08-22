@@ -112,6 +112,8 @@ export async function applyRunResult(
     vertical: callVertical,
     house_ownership: signals.house_ownership,
     solar_planning: signals.solar_planning,
+    currently_investing: signals.currently_investing,
+    investment_type: signals.investment_type,
     interested: signals.interested,
     budget: signals.budget,
     visit_date: signals.visit_date,

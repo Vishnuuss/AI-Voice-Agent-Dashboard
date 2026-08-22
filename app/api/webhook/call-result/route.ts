@@ -275,6 +275,8 @@ export async function POST(request: Request) {
       vertical: callVertical,
       house_ownership: signals.house_ownership,
       solar_planning: signals.solar_planning,
+      currently_investing: signals.currently_investing,
+      investment_type: signals.investment_type,
       interested: signals.interested,
       budget: signals.budget,
       visit_date: signals.visit_date,
@@ -390,10 +392,14 @@ export async function POST(request: Request) {
       if (recording) update.recording_url = recording;
       if (transcript) update.transcript_url = transcript;
       if (signals.budget) update.budget = signals.budget;
-      // `property_type` is the loan agent's column (it holds the loan type). A
-      // solar call must not write into it - its own answers live in qual_data,
-      // which is what the dashboard reads for a solar lead.
-      if (signals.loan_type && callVertical !== 'solar') update.property_type = signals.loan_type;
+      // `property_type` is the loan agent's column (it holds the loan type).
+      // Neither a solar nor an investing call may write into it - their own
+      // answers live in qual_data, which is what the dashboard reads for those
+      // leads. An investing lead's "SIP" landing here would be shown as
+      // "SIP loan", the same way a solar lead once read "Own house loan".
+      if (signals.loan_type && callVertical !== 'solar' && callVertical !== 'investing') {
+        update.property_type = signals.loan_type;
+      }
       // The solar agent's two answers, in their own columns (007_solar_fields.sql)
       // as well as in qual_data, so the solar team can query them directly.
       if (signals.house_ownership) update.house_ownership = signals.house_ownership;

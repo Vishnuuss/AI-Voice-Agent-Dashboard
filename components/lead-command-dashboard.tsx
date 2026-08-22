@@ -338,16 +338,89 @@ function solarPlanOf(lead: any): string | null {
 }
 
 /**
+ * "SIP", "Mutual fund", "FD" — what the caller said they already put money into.
+ *
+ * Investing has no columns of its own on the leads table and does not need any:
+ * the webhook writes both answers into qual_data, which every lead has. Nothing
+ * to run in the SQL editor before this shows up.
+ */
+function investmentTypeOf(lead: any): string | null {
+  const raw = lead?.qual_data?.investment_type
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** "Already investing · SIP" / "Not investing yet" — null when never answered. */
+function investingOf(lead: any): string | null {
+  const raw = lead?.qual_data?.currently_investing
+  const type = investmentTypeOf(lead)
+  if (raw === true) return type ? `Already investing · ${type}` : "Already investing"
+  if (raw === false) return "Not investing yet"
+  // The agent sometimes names the product without ever setting the flag; naming
+  // one IS the answer, so do not show a blank for it.
+  return type ? `Already investing · ${type}` : null
+}
+
+/**
+ * The investing agent's second signal: did they agree to the advisor calling.
+ * "Yes" / "No", never a blank guess — null means they never got that far.
+ */
+function advisorInterestOf(lead: any): string | null {
+  const raw = lead?.qual_data?.interested
+  if (raw === true) return "Yes"
+  if (raw === false) return "No"
+  return null
+}
+
+/**
  * The one fact that matters about a lead — which is a different fact per
  * business line. A loan lead's is the loan type; a solar lead's is whether the
- * house is theirs and whether they are planning solar. Reading the loan type on
- * a solar lead was showing "Own house loan", which is not a thing anyone sells.
+ * house is theirs and whether they are planning solar; an investing lead's is
+ * whether they already invest and whether they want the advisor call. Reading
+ * the loan type on a solar lead was showing "Own house loan", which is not a
+ * thing anyone sells — and on an investing lead it showed nothing at all.
  */
 function requirementOf(lead: any): string | null {
   if (verticalOf(lead) === "solar") {
     return [houseOf(lead), solarPlanOf(lead)].filter(Boolean).join(" · ") || null
   }
+  if (verticalOf(lead) === "investing") {
+    const interest = advisorInterestOf(lead)
+    return [investingOf(lead), interest ? `advisor: ${interest.toLowerCase()}` : null].filter(Boolean).join(" · ") || null
+  }
   return loanTypeOf(lead)
+}
+
+/**
+ * The two middle table columns, per business line.
+ *
+ * Each agent asks its own questions, so "Requirement / Budget" only describes a
+ * loan lead. Rather than a `solar` boolean — which had to be re-plumbed through
+ * every table the moment a third agent shipped — each line names its own pair of
+ * headers and how to read them off a lead. `null` means the default loan pair.
+ */
+type LineColumns = { headers: [string, string]; values: (lead: any) => [string | null, string | null] }
+
+const LINE_COLUMNS: Partial<Record<Vertical, LineColumns>> = {
+  solar: {
+    headers: ["House", "Solar plan"],
+    values: (lead) => [houseOf(lead), solarPlanOf(lead)],
+  },
+  investing: {
+    headers: ["Investing", "Advisor interest"],
+    values: (lead) => [investingOf(lead), advisorInterestOf(lead)],
+  },
+}
+
+/**
+ * Only when ONE business line is selected. Under "All" the table mixes lines and
+ * a single set of headers cannot honestly describe all four, so it keeps the
+ * loan pair and the per-lead facts stay in the Requirement column.
+ */
+function lineColumnsFor(vertical: VerticalFilter): LineColumns | null {
+  return vertical === "all" ? null : LINE_COLUMNS[vertical] ?? null
 }
 
 /**
@@ -424,16 +497,17 @@ function EmptyRow({ colSpan, children }: { colSpan: number; children: React.Reac
 /**
  * Shared lead table row, used by the overview, leads and follow-up tables.
  *
- * `solar` switches the two middle columns from the loan pair (requirement,
- * budget) to the solar pair (house, plan). It follows the header's business-line
- * switch, not the individual lead: a table has one set of headers, so the
- * columns can only match the line being viewed.
+ * `line` switches the two middle columns from the loan pair (requirement,
+ * budget) to whatever the selected business line actually asks — the solar pair
+ * (house, plan), the investing pair (investing, advisor interest). It follows
+ * the header's business-line switch, not the individual lead: a table has one
+ * set of headers, so the columns can only match the line being viewed.
  */
 function LeadRow({
   lead,
   onSelect,
   columns,
-  solar = false,
+  line = null,
   onCallPlaced,
   selected,
   onToggleSelect,
@@ -441,7 +515,7 @@ function LeadRow({
   lead: any
   onSelect: (lead: any) => void
   columns: "compact" | "full"
-  solar?: boolean
+  line?: LineColumns | null
   onCallPlaced?: () => void
   /** Selection is opt-in: passing onToggleSelect adds the tick column. The
    *  Overview and Follow-ups tables share this row and have no bulk delete, so
@@ -501,15 +575,16 @@ function LeadRow({
           <TableCell className="hidden 2xl:table-cell">
             <span className="text-sm text-muted-foreground">{lead.city || "—"}</span>
           </TableCell>
-          {/* The solar agent asks two questions and neither is a loan type or a
-              budget, so on the Solar view those two columns ARE the answers. */}
-          {solar ? (
+          {/* Solar asks about the house, investing asks what they already put
+              money into — neither is a loan type or a budget, so on those views
+              those two columns ARE that line's answers. */}
+          {line ? (
             <>
               <TableCell>
-                <span className="text-sm">{houseOf(lead) || "—"}</span>
+                <span className="text-sm">{line.values(lead)[0] || "—"}</span>
               </TableCell>
               <TableCell>
-                <span className="text-sm">{solarPlanOf(lead) || "—"}</span>
+                <span className="text-sm">{line.values(lead)[1] || "—"}</span>
               </TableCell>
             </>
           ) : (
@@ -587,7 +662,7 @@ function LeadRow({
 function LeadCardMobile({
   lead,
   onSelect,
-  solar = false,
+  line = null,
   onCallPlaced,
   selectable,
   selected,
@@ -595,7 +670,7 @@ function LeadCardMobile({
 }: {
   lead: any
   onSelect: (lead: any) => void
-  solar?: boolean
+  line?: LineColumns | null
   onCallPlaced?: () => void
   selectable: boolean
   selected: boolean
@@ -603,8 +678,7 @@ function LeadCardMobile({
 }) {
   const score = lead.score ?? 0
   const scoreData = getScoreLabel(score)
-  const detail = solar ? houseOf(lead) : requirementOf(lead)
-  const detail2 = solar ? solarPlanOf(lead) : lead.budget
+  const [detail, detail2] = line ? line.values(lead) : [requirementOf(lead), lead.budget]
 
   return (
     <div
@@ -1166,10 +1240,11 @@ function LeadsPage({
   dateRange: DateRange
   setDateRange: (r: DateRange) => void
 }) {
-  // On the Solar view the table shows the solar answers instead of the loan
-  // ones. Only when Solar is actually selected: under "All" the table mixes
-  // business lines and one set of headers cannot describe all four.
-  const solar = vertical === "solar"
+  // On the Solar and Investing views the table shows that line's own answers
+  // instead of the loan ones. Only when one line is actually selected: under
+  // "All" the table mixes business lines and one set of headers cannot describe
+  // all four.
+  const line = lineColumnsFor(vertical)
 
   // Ticks are dropped whenever the filter or the business line changes: a row
   // ticked under one filter is not necessarily visible under the next, and
@@ -1285,7 +1360,7 @@ function LeadsPage({
                   key={lead.id}
                   lead={lead}
                   onSelect={onSelectLead}
-                  solar={solar}
+                  line={line}
                   onCallPlaced={onCallPlaced}
                   selectable={selecting}
                   selected={selected.includes(lead.id)}
@@ -1325,11 +1400,12 @@ function LeadsPage({
                 <TableHead className="hidden xl:table-cell">Source</TableHead>
                 <TableHead className="hidden 2xl:table-cell">Location</TableHead>
                 {/* Not "Loan type": this table holds all four business lines.
-                    On Solar it becomes the two questions the agent asks. */}
-                {solar ? (
+                    On Solar and Investing these become the questions that line's
+                    agent actually asks. */}
+                {line ? (
                   <>
-                    <TableHead>House</TableHead>
-                    <TableHead>Solar plan</TableHead>
+                    <TableHead>{line.headers[0]}</TableHead>
+                    <TableHead>{line.headers[1]}</TableHead>
                   </>
                 ) : (
                   <>
@@ -1354,7 +1430,7 @@ function LeadsPage({
                     lead={lead}
                     onSelect={onSelectLead}
                     columns="full"
-                    solar={solar}
+                    line={line}
                     onCallPlaced={onCallPlaced}
                     selected={selected.includes(lead.id)}
                     // Passing this is what adds the tick column, so withholding
@@ -3692,17 +3768,20 @@ function LeadDetailSheet({
                 <p className="text-xs text-muted-foreground">Source</p>
                 <p className="text-lg font-semibold">{lead.source || "—"}</p>
               </div>
-              {/* A solar call asks two questions and neither of them is a loan
-                  type or a budget, so the solar lead gets its own two tiles. */}
-              {verticalOf(lead) === "solar" ? (
+              {/* Solar and investing calls each ask two questions and neither
+                  line's questions are a loan type or a budget, so each gets its
+                  own two tiles. Keyed off THIS lead's business line, not the
+                  header switch: the drawer shows one lead, so it can be exact
+                  even when the list behind it is set to "All". */}
+              {LINE_COLUMNS[verticalOf(lead)] ? (
                 <>
                   <div className="rounded-lg bg-secondary p-3">
-                    <p className="text-xs text-muted-foreground">House</p>
-                    <p className="text-sm font-semibold">{houseOf(lead) || "—"}</p>
+                    <p className="text-xs text-muted-foreground">{LINE_COLUMNS[verticalOf(lead)]!.headers[0]}</p>
+                    <p className="text-sm font-semibold">{LINE_COLUMNS[verticalOf(lead)]!.values(lead)[0] || "—"}</p>
                   </div>
                   <div className="rounded-lg bg-secondary p-3">
-                    <p className="text-xs text-muted-foreground">Solar plan</p>
-                    <p className="text-sm font-semibold">{solarPlanOf(lead) || "—"}</p>
+                    <p className="text-xs text-muted-foreground">{LINE_COLUMNS[verticalOf(lead)]!.headers[1]}</p>
+                    <p className="text-sm font-semibold">{LINE_COLUMNS[verticalOf(lead)]!.values(lead)[1] || "—"}</p>
                   </div>
                 </>
               ) : (

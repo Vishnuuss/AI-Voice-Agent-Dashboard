@@ -134,6 +134,14 @@ export interface CallSignals {
   house_ownership: HouseOwnership | null;
   /** Solar: are they planning / thinking about putting solar on it. */
   solar_planning: boolean | null;
+  /**
+   * Investing: does the caller already put money away every month - SIP, mutual
+   * fund, FD, savings, insurance, chit, gold. The investing agent (Dograh
+   * workflow 6) asks exactly this one question, so it is the whole qualification.
+   */
+  currently_investing: boolean | null;
+  /** Investing: what they said they invest in, in plain English ("SIP", "FD"). */
+  investment_type: string | null;
   profession: string | null;
   monthly_income: string | null;
   existing_emi: string | null;
@@ -246,6 +254,15 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     solar_planning: cleanBoolean(
       pick(flat, ['solar_planning', 'planning_solar', 'solar_plan', 'planning_for_solar', 'solar_interest']),
     ),
+    currently_investing: cleanBoolean(
+      pick(flat, ['currently_investing', 'is_investing', 'already_investing', 'investing', 'invests']),
+    ),
+    // Deliberately NOT one of the loan_type aliases: an investing call's "SIP"
+    // is not a loan type, and reading it as one would put "SIP loan" on screen -
+    // the same mistake `property_type` made on solar leads.
+    investment_type: cleanString(
+      pick(flat, ['investment_type', 'investing_type', 'investment_product', 'invests_in', 'investment']),
+    ),
     profession: cleanString(pick(flat, ['profession', 'occupation', 'income_type', 'employment_type'])),
     monthly_income: cleanString(pick(flat, ['monthly_income', 'income', 'salary'])),
     existing_emi: cleanString(pick(flat, ['existing_emi', 'current_emi', 'emi'])),
@@ -257,7 +274,11 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     customer_name: cleanString(pick(flat, ['customer_name', 'name', 'lead_name'])),
     qualified_flag: qualifiedFlag,
     lead_score: cleanString(pick(flat, ['lead_score', 'score', 'call_score'])),
-    vertical: vertical ?? DEFAULT_VERTICAL,
+    // Left NULL when the agent did not name a business line. It used to default
+    // to 'loan' here, which meant buildGatheredContext's lead fallback could
+    // never fire: an investing agent that does not send `vertical` (workflow 6
+    // does not) had every one of its calls stored as "from Loan".
+    vertical,
   };
 }
 
@@ -278,6 +299,11 @@ export function hasQualificationSignal(signals: CallSignals): boolean {
       // rent call carried no signal, so its 0 was never written to the lead.
       signals.house_ownership ||
       signals.solar_planning !== null ||
+      // Investing: "I already do a SIP" is the entire answer to an investing
+      // call. Without it such a call carries no signal and its score is never
+      // written to the lead.
+      signals.currently_investing !== null ||
+      signals.investment_type ||
       signals.profession ||
       signals.monthly_income ||
       signals.existing_emi ||
@@ -364,9 +390,9 @@ export function buildGatheredContext(
   scoring?: { score: number; scoredBy: string; reason: string },
   /**
    * The business line of the LEAD this call belongs to, used when the agent
-   * did not name one itself. Without it every call was stored as `loan`,
-   * because extractCallSignals defaults an absent vertical to DEFAULT_VERTICAL
-   * - so a solar call's history would have read "100 from Loan".
+   * did not name one itself - which is most agents: workflows 5 and 6 never
+   * send `vertical`. Without it every call was stored as `loan`, so a solar or
+   * investing call's history read "100 from Loan".
    */
   leadVertical?: unknown,
 ): Record<string, any> {
@@ -382,6 +408,10 @@ export function buildGatheredContext(
   // "Own house / planning solar" instead of borrowing the loan agent's fields.
   if (signals.house_ownership) context.house_ownership = signals.house_ownership;
   if (signals.solar_planning !== null) context.solar_planning = signals.solar_planning;
+  // Investing's two answers, under their own names for the same reason: the
+  // dashboard shows "Already investing · SIP", not a loan type and a budget.
+  if (signals.currently_investing !== null) context.currently_investing = signals.currently_investing;
+  if (signals.investment_type) context.investment_type = signals.investment_type;
   if (signals.profession) context.profession = signals.profession;
   if (signals.monthly_income) context.monthly_income = signals.monthly_income;
   if (signals.existing_emi) context.existing_emi = signals.existing_emi;
@@ -415,6 +445,8 @@ export function buildNoteLine(
     signals.loan_type ? `loan: ${signals.loan_type}` : null,
     signals.house_ownership ? `house: ${signals.house_ownership === 'own' ? 'own house' : 'rented'}` : null,
     signals.solar_planning !== null ? `solar plan: ${signals.solar_planning ? 'yes' : 'no'}` : null,
+    signals.currently_investing !== null ? `investing: ${signals.currently_investing ? 'yes' : 'no'}` : null,
+    signals.investment_type ? `invests in: ${signals.investment_type}` : null,
     signals.budget ? `amount: ${signals.budget}` : null,
     signals.profession ? `profession: ${signals.profession}` : null,
     signals.visit_date ? `follow-up: ${signals.visit_date}` : null,

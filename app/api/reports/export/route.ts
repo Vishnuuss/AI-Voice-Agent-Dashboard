@@ -24,10 +24,14 @@ export async function GET(request: Request) {
     // loan officer - a name and a score alone do not say what to call about.
     // house_ownership / solar_planning are the same thing for a solar lead: the
     // executive picking up the file needs to see "own house, planning solar".
+    // currently_investing / investment_type / advisor_interest are the investing
+    // agent's answers - an investing lead exported with only a loan_type column
+    // is a name and a number the advisor cannot act on.
     // score_reason travels with the score so an exported list is auditable.
     const headers = [
       'id', 'name', 'phone', 'email', 'city', 'vertical', 'status', 'qualification', 'score',
-      'loan_type', 'house_ownership', 'solar_planning', 'budget', 'score_reason', 'created_at', 'call_outcome',
+      'loan_type', 'house_ownership', 'solar_planning', 'currently_investing', 'investment_type',
+      'advisor_interest', 'budget', 'score_reason', 'created_at', 'call_outcome',
     ];
     const csvRows = [];
     csvRows.push(headers.join(','));
@@ -58,6 +62,15 @@ export async function GET(request: Request) {
           : (lead.solar_planning ?? lead.qual_data?.solar_planning) === false
             ? 'no'
             : '',
+        // Investing has no columns on the leads table: the webhook writes both
+        // answers into qual_data, so that is the only place to read them from.
+        lead.qual_data?.currently_investing === true
+          ? 'yes'
+          : lead.qual_data?.currently_investing === false
+            ? 'no'
+            : '',
+        `"${String(lead.qual_data?.investment_type || '').replace(/"/g, '""')}"`,
+        lead.qual_data?.interested === true ? 'yes' : lead.qual_data?.interested === false ? 'no' : '',
         `"${String(lead.budget || lead.qual_data?.loan_amount || '').replace(/"/g, '""')}"`,
         `"${String(lead.qual_data?.scoring?.reason || '').replace(/"/g, '""')}"`,
         lead.created_at,

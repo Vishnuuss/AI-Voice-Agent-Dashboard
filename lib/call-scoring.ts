@@ -145,7 +145,12 @@ const NON_ANSWERS = new Set([
   'no',
 ]);
 
-/** True only when the caller named a real, actionable loan type. */
+/**
+ * True only when the caller named a real, actionable answer - a loan type on a
+ * loan call, an investment product on an investing call. Also used for
+ * `investment_type`, where "nothing" and "none" are exactly the words that must
+ * NOT count as "they already invest".
+ */
 function isRealLoanType(value: unknown): boolean {
   if (!isMeaningful(value)) return false;
   return !NON_ANSWERS.has(String(value).trim().toLowerCase());
@@ -183,15 +188,20 @@ export interface ScoreInput {
    */
   lead_score?: unknown;
   /**
-   * Which business line the call was for. Only 'solar' changes anything today:
-   * it selects the solar ladder below instead of the loan one. Anything else,
-   * including undefined, keeps the existing loan behaviour untouched.
+   * Which business line the call was for. 'solar' and 'investing' each select
+   * their own ladder below instead of the loan one, because each agent asks a
+   * different question. Anything else, including undefined, keeps the existing
+   * loan behaviour untouched.
    */
   vertical?: unknown;
   /** Solar: 'own' or 'rent'. Rent is a hard disqualification - no roof of their own. */
   house_ownership?: unknown;
   /** Solar: whether they said they are planning / thinking about solar. */
   solar_planning?: unknown;
+  /** Investing: whether they already invest or save monthly in anything. */
+  currently_investing?: unknown;
+  /** Investing: what they invest in ("SIP", "FD", "mutual fund"). */
+  investment_type?: unknown;
 }
 
 export interface ScoreResult {
@@ -258,7 +268,9 @@ export function scoreCall(input: ScoreInput): ScoreResult {
   //    50  own house, no plan (or never said)  -> the roof is there, the intent is not
   //     0  rented house                  -> cannot install; not a lead at any price
   //    25  talked but never answered either question (the engaged floor below)
-  const isSolar = String(input.vertical ?? '').trim().toLowerCase() === 'solar';
+  const vertical = String(input.vertical ?? '').trim().toLowerCase();
+  const isSolar = vertical === 'solar';
+  const isInvesting = vertical === 'investing';
 
   if (isSolar) {
     const house = String(input.house_ownership ?? '').trim().toLowerCase();
@@ -297,6 +309,77 @@ export function scoreCall(input: ScoreInput): ScoreResult {
     // is exactly "they simply talked" - deliberately below 50.
   }
 
+  // ── The investing ladder ────────────────────────────────────────────────
+  //
+  // The investing agent (Dograh workflow 6, "Sreeja") asks exactly ONE question:
+  // "do you invest or save monthly in anything - SIP, mutual fund, FD, savings?"
+  // It never asks an amount, an income or a loan type, so running an investing
+  // call through the loan rules scored it on a question nobody asked and landed
+  // every investing lead on the flat fallback - the same failure solar had.
+  //
+  //   100  already invests AND agreed to the advisor call
+  //    50  already invests but did not clearly agree, OR agreed but invests in
+  //        nothing yet - both are worth an advisor's time, neither is a closed deal
+  //     0  refused outright
+  //    25  invests in nothing and never said either way - talked, did not refuse
+  if (isInvesting) {
+    const investing = isTruthyFlag(input.currently_investing) || isRealLoanType(input.investment_type);
+    const saidNotInvesting =
+      input.currently_investing === false ||
+      String(input.currently_investing ?? '').trim().toLowerCase() === 'false';
+    const wantsAdvisor = isTruthyFlag(input.interested);
+    const refused =
+      input.interested === false || String(input.interested ?? '').trim().toLowerCase() === 'false';
+
+    // A flat refusal outranks everything: someone who already invests but told
+    // the agent no is not a lead, and calling them again is how a firm gets a
+    // reputation. Deliberately checked before the "already invests" branch.
+    if (refused) {
+      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they are not interested in investment advice' };
+    }
+
+    if (investing) {
+      const what = isRealLoanType(input.investment_type) ? String(input.investment_type).trim() : null;
+      if (wantsAdvisor) {
+        return {
+          score: 100,
+          qualification: 'qualified',
+          outcome,
+          answered,
+          durationSeconds,
+          scoredBy: 'rules',
+          reason: what
+            ? `Already investing in ${what} and agreed to the advisor call`
+            : 'Already investing and agreed to the advisor call',
+        };
+      }
+      return {
+        score: 50,
+        qualification: 'not_qualified',
+        outcome,
+        answered,
+        durationSeconds,
+        scoredBy: 'rules',
+        reason: what
+          ? `Already investing in ${what}, did not clearly agree to the advisor call`
+          : 'Already investing, did not clearly agree to the advisor call',
+      };
+    }
+
+    if (wantsAdvisor) {
+      return { score: 50, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Not investing yet but open to hearing the options' };
+    }
+
+    // "I invest in nothing" is NOT a refusal on this call - the agent closes
+    // warmly and the person is still callable later. Scoring it 0 would file
+    // them with the people who said do-not-call.
+    if (saidNotInvesting) {
+      return { score: ENGAGED_SCORE, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Not investing in anything today and did not ask for advice' };
+    }
+    // Neither question answered. Falls through to the agent's own number and
+    // then the engaged floor, exactly like solar.
+  }
+
   // ── The loan ladder ─────────────────────────────────────────────────────
   //
   // Computed HERE from the fields the agent extracted, not taken from a number
@@ -308,10 +391,10 @@ export function scoreCall(input: ScoreInput): ScoreResult {
   //   100  named a loan type      -> a real, actionable lead
   //    50  needs a loan, no type  -> worth a callback, not yet actionable
   //     0  said no                -> not a lead
-  // Skipped for solar: a solar call that reached here answered neither of its own
-  // questions, and phrasing that as "did not name a loan type" would put a loan
-  // sentence on a solar lead's record.
-  if (!isSolar) {
+  // Skipped for solar and investing: a call from either that reached here
+  // answered neither of its own questions, and phrasing that as "did not name a
+  // loan type" would put a loan sentence on a lead who was never asked about one.
+  if (!isSolar && !isInvesting) {
     if (isRealLoanType(input.loan_type)) {
       const type = String(input.loan_type).trim();
       return { score: 100, qualification: 'qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: `Named a loan type: ${type}` };
