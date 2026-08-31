@@ -375,6 +375,40 @@ function advisorInterestOf(lead: any): string | null {
 }
 
 /**
+ * Real estate has no columns of its own on the leads table, same as investing:
+ * the webhook writes all four answers into qual_data, which every lead has.
+ */
+function propertyTypeOf(lead: any): string | null {
+  const raw = lead?.qual_data?.property_type
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function dealTypeOf(lead: any): string | null {
+  const raw = lead?.qual_data?.deal_type
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function locationOf(lead: any): string | null {
+  const raw = lead?.qual_data?.location
+  if (!raw) return null
+  const s = String(raw).trim()
+  return s || null
+}
+
+/** "Plot · Buy" / "Independent house" — null when neither was ever said. */
+function propertyWantOf(lead: any): string | null {
+  const type = propertyTypeOf(lead)
+  const deal = dealTypeOf(lead)
+  return [type, deal].filter(Boolean).join(" · ") || null
+}
+
+/**
  * The one fact that matters about a lead — which is a different fact per
  * business line. A loan lead's is the loan type; a solar lead's is whether the
  * house is theirs and whether they are planning solar; an investing lead's is
@@ -389,6 +423,9 @@ function requirementOf(lead: any): string | null {
   if (verticalOf(lead) === "investing") {
     const interest = advisorInterestOf(lead)
     return [investingOf(lead), interest ? `advisor: ${interest.toLowerCase()}` : null].filter(Boolean).join(" · ") || null
+  }
+  if (verticalOf(lead) === "realestate") {
+    return [propertyWantOf(lead), locationOf(lead)].filter(Boolean).join(" · ") || null
   }
   return loanTypeOf(lead)
 }
@@ -411,6 +448,10 @@ const LINE_COLUMNS: Partial<Record<Vertical, LineColumns>> = {
   investing: {
     headers: ["Investing", "Advisor interest"],
     values: (lead) => [investingOf(lead), advisorInterestOf(lead)],
+  },
+  realestate: {
+    headers: ["Property", "Location"],
+    values: (lead) => [propertyWantOf(lead), locationOf(lead)],
   },
 }
 

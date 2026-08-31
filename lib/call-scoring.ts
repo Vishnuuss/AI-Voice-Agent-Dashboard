@@ -395,6 +395,18 @@ export function scoreCall(input: ScoreInput): ScoreResult {
   // answered neither of its own questions, and phrasing that as "did not name a
   // loan type" would put a loan sentence on a lead who was never asked about one.
   if (!isSolar && !isInvesting) {
+    // Interest was explicitly denied - a real "no", not merely a missing field.
+    // Checked BEFORE loan_type on purpose: the agent's own script repeats loan
+    // names ("home loan, personal loan, business loan అండి?") while re-asking, and
+    // the extraction model can misattribute one of those words to the customer on
+    // a call where they actually said no. An explicit refusal must always win over
+    // a possibly-hallucinated loan type, the same way do_not_call overrides
+    // everything above - otherwise a declined lead gets filed as "qualified" and
+    // called again, which is worse than not qualifying a real one.
+    if (input.interested === false || String(input.interested ?? '').trim().toLowerCase() === 'false') {
+      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they do not need a loan' };
+    }
+
     if (isRealLoanType(input.loan_type)) {
       const type = String(input.loan_type).trim();
       return { score: 100, qualification: 'qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: `Named a loan type: ${type}` };
@@ -402,11 +414,6 @@ export function scoreCall(input: ScoreInput): ScoreResult {
 
     if (isTruthyFlag(input.interested)) {
       return { score: 50, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they need a loan but did not name a type' };
-    }
-
-    // Interest was explicitly denied - a real "no", not merely a missing field.
-    if (input.interested === false || String(input.interested ?? '').trim().toLowerCase() === 'false') {
-      return { score: 0, qualification: 'not_qualified', outcome, answered, durationSeconds, scoredBy: 'rules', reason: 'Said they do not need a loan' };
     }
   }
 

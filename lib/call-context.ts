@@ -149,6 +149,14 @@ export interface CallSignals {
   customer_intent: string | null;
   do_not_call: boolean | null;
   summary: string | null;
+  /** Real estate: plot, independent house, flat, villa, commercial, as stated. */
+  realestate_property_type: string | null;
+  /** Real estate: buy, sell, rent, or unclear. */
+  realestate_deal_type: string | null;
+  /** Real estate: area or locality mentioned. */
+  realestate_location: string | null;
+  /** Real estate: how soon they said they want to proceed. */
+  realestate_timeline: string | null;
   notes: string | null;
   customer_name: string | null;
   /** The agent's own qualified flag, used as a fallback interest signal. */
@@ -270,6 +278,15 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     customer_intent: cleanString(pick(flat, ['customer_intent', 'intent', 'disposition'])),
     do_not_call: cleanBoolean(pick(flat, ['do_not_call', 'dnc', 'opt_out'])),
     summary: cleanString(pick(flat, ['summary', 'call_summary', 'crm_summary'])),
+    // Deliberately NOT 'property_type': that key is already claimed by the loan
+    // agent's loan-type alias and by parseHouseOwnership's solar check, so a
+    // real-estate call sending "plot" under that name could get filed as a loan
+    // type or misread as a house-ownership answer. The real-estate webhook sends
+    // this field as `property_kind` for exactly that reason.
+    realestate_property_type: cleanString(pick(flat, ['property_kind', 'realestate_property_type'])),
+    realestate_deal_type: cleanString(pick(flat, ['deal_type', 'realestate_deal_type'])),
+    realestate_location: cleanString(pick(flat, ['location', 'realestate_location', 'area'])),
+    realestate_timeline: cleanString(pick(flat, ['timeline', 'realestate_timeline'])),
     notes: cleanString(pick(flat, ['notes', 'note', 'remarks', 'comments'])),
     customer_name: cleanString(pick(flat, ['customer_name', 'name', 'lead_name'])),
     qualified_flag: qualifiedFlag,
@@ -308,7 +325,12 @@ export function hasQualificationSignal(signals: CallSignals): boolean {
       signals.monthly_income ||
       signals.existing_emi ||
       signals.visit_date ||
-      signals.do_not_call !== null,
+      signals.do_not_call !== null ||
+      // Real estate: any one of these is a real answer, same as budget already is.
+      signals.realestate_property_type ||
+      signals.realestate_deal_type ||
+      signals.realestate_location ||
+      signals.realestate_timeline,
   );
 }
 
@@ -417,6 +439,13 @@ export function buildGatheredContext(
   if (signals.existing_emi) context.existing_emi = signals.existing_emi;
   if (signals.visit_date) context.preferred_visit_date = signals.visit_date;
   if (signals.customer_intent) context.customer_intent = signals.customer_intent;
+  // Real estate's answers, under their own names for the same reason solar and
+  // investing get their own: the dashboard shows "Plot · Gachibowli", not a loan
+  // type and a budget.
+  if (signals.realestate_property_type) context.property_type = signals.realestate_property_type;
+  if (signals.realestate_deal_type) context.deal_type = signals.realestate_deal_type;
+  if (signals.realestate_location) context.location = signals.realestate_location;
+  if (signals.realestate_timeline) context.timeline = signals.realestate_timeline;
   if (signals.do_not_call !== null) context.do_not_call = signals.do_not_call;
   if (signals.summary) context.summary = signals.summary;
   if (signals.notes) context.call_notes = signals.notes;
@@ -450,6 +479,9 @@ export function buildNoteLine(
     signals.budget ? `amount: ${signals.budget}` : null,
     signals.profession ? `profession: ${signals.profession}` : null,
     signals.visit_date ? `follow-up: ${signals.visit_date}` : null,
+    signals.realestate_property_type ? `property: ${signals.realestate_property_type}` : null,
+    signals.realestate_location ? `location: ${signals.realestate_location}` : null,
+    signals.realestate_deal_type ? `deal: ${signals.realestate_deal_type}` : null,
     signals.summary ?? signals.notes ?? null,
   ]
     .filter(Boolean)
