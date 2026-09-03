@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { callProvider, hasProviderColumn } from './call-provider';
 import { dograh } from './dograh';
 import { hashPhone } from './billing';
 import { normaliseOutcome } from './call-scoring';
@@ -17,6 +18,33 @@ import { normaliseOutcome } from './call-scoring';
  * is nullable and duplicates are already possible), we refuse to meter a run we
  * cannot identify.
  */
+
+/**
+ * How to identify a call for insert-if-absent, given what the billing database
+ * currently has.
+ *
+ * A run id alone stopped being an identity on 2026-09-03: Vaani numbers from 1
+ * and 183 of the ids it has already issued belong to voice-era rows here. An
+ * unscoped `onConflict: 'dograh_run_id'` makes a real Vaani call collide with a
+ * call billed in August, `ignoreDuplicates` drops it, and the client is never
+ * charged for it.
+ *
+ * The conflict target has to name the columns of the index that actually
+ * exists, so this follows the database rather than assuming 010 has been
+ * applied.
+ */
+async function usageConflict(billing: SupabaseClient): Promise<{
+  conflictTarget: string;
+  stamp: (row: Record<string, any>) => Record<string, any>;
+}> {
+  const scoped = await hasProviderColumn(billing, 'call_usage');
+  if (!scoped) return { conflictTarget: 'dograh_run_id', stamp: (row) => row };
+  const provider = callProvider();
+  return {
+    conflictTarget: 'provider,dograh_run_id',
+    stamp: (row) => ({ ...row, provider }),
+  };
+}
 
 /**
  * Dograh disposition -> the outcome vocabulary billing understands.
@@ -98,12 +126,15 @@ export async function meterCampaign(
     out.runsSeen += rows.length;
 
     if (rows.length > 0) {
+      // Must match whichever unique index the billing database actually has,
+      // or PostgREST resolves the upsert against the wrong one.
+      const { conflictTarget, stamp } = await usageConflict(billing);
       // ignoreDuplicates keeps this a pure insert-if-absent: a run we have
       // already metered (and possibly already charged for) is never rewritten,
       // so a re-run cannot alter the basis of a charge that has been issued.
       const { data, error } = await billing
         .from('call_usage')
-        .upsert(rows, { onConflict: 'dograh_run_id', ignoreDuplicates: true })
+        .upsert(rows.map(stamp), { onConflict: conflictTarget, ignoreDuplicates: true })
         .select('id');
 
       if (error) {
@@ -194,9 +225,10 @@ export async function meterSingleRun(
     // Same insert-if-absent contract as meterCampaign: a run we have already
     // metered is never rewritten, so this cannot alter the basis of a charge
     // that has already been issued.
+    const { conflictTarget, stamp } = await usageConflict(billing);
     const { error } = await billing
       .from('call_usage')
-      .upsert([row], { onConflict: 'dograh_run_id', ignoreDuplicates: true });
+      .upsert([stamp(row)], { onConflict: conflictTarget, ignoreDuplicates: true });
 
     if (error) {
       console.error('[meter] single-run upsert failed', { run: dograhRunId, error: error.message });
@@ -205,11 +237,19 @@ export async function meterSingleRun(
 
     // Read back for the row id — whether we just inserted it or it was already
     // there — because postDebit stamps billed_at on it by id.
-    const { data: stored } = await billing
-      .from('call_usage')
-      .select('id, dograh_run_id, duration_seconds, call_mode, outcome, usage_info, campaign_id')
-      .eq('dograh_run_id', dograhRunId)
-      .maybeSingle();
+    // Scoped the same way as the write. Unscoped, this reads back the OLD
+    // backend's row for a colliding id and postDebit would then stamp billed_at
+    // on a call from August instead of the one that just happened. maybeSingle
+    // would also error outright once both rows exist.
+    // Selecting `provider` before 010 is applied would fail the whole read, so
+    // both the column list and the filter follow what the database has.
+    const scoped = await hasProviderColumn(billing, 'call_usage');
+    const columns =
+      'id, dograh_run_id, duration_seconds, call_mode, outcome, usage_info, campaign_id' +
+      (scoped ? ', provider' : '');
+    let readBack = billing.from('call_usage').select(columns).eq('dograh_run_id', dograhRunId);
+    if (scoped) readBack = readBack.eq('provider', callProvider());
+    const { data: stored } = await readBack.maybeSingle();
 
     return (stored as any) ?? { ...row, id: undefined };
   } catch (err: any) {

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getMaxRetries } from '@/lib/call-behavior';
+import { dograh } from '@/lib/dograh';
+import { findExistingCallLog, withProvider } from '@/lib/call-provider';
 import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
@@ -15,6 +17,50 @@ import { DEFAULT_VERTICAL, isWrongVerticalMatch, parseVertical } from '@/lib/ver
 import type { DograhRunRecord } from '@/types';
 
 const MAX_NOTES_LENGTH = 2_000;
+
+/**
+ * The recording and transcript links for a run, which the campaign-runs LIST
+ * cannot give us.
+ *
+ * Dograh puts a bare storage key in `recording_url` ("recordings/400.wav") and
+ * the only fetchable link in `recording_public_url`. The catch, verified on
+ * runs 398 and 400: the LIST endpoint this sweep reads returns
+ * `recording_public_url: null` AND `public_access_token: null`, while the
+ * per-run fetch returns real links for the same call. So every reconciled call
+ * stored NULL for both, and the dashboard showed no recording and no transcript
+ * for any call it had recovered — which is every call on the agents whose
+ * published workflow has no webhook node.
+ *
+ * The token cannot be reconstructed locally, so there is no way to build the URL
+ * without asking for the run. One extra request per NEW call only: this runs
+ * after the duplicate check, so a steady state sweep makes none.
+ */
+async function resolveMediaUrls(
+  run: Record<string, any>,
+): Promise<{ recording: string | null; transcript: string | null }> {
+  let recording = usableMediaUrl(run.recording_public_url) ?? usableMediaUrl(run.recording_url);
+  let transcript = usableMediaUrl(run.transcript_public_url) ?? usableMediaUrl(run.transcript_url);
+  if (recording && transcript) return { recording, transcript };
+
+  // Nothing to go and fetch if the call produced neither artefact.
+  if (!run.recording_url && !run.transcript_url) return { recording, transcript };
+
+  const workflowId = Number(run.workflow_id);
+  const runId = Number(run.id);
+  if (!Number.isFinite(workflowId) || !Number.isFinite(runId)) return { recording, transcript };
+
+  try {
+    const full = await dograh.getWorkflowRun(workflowId, runId);
+    recording =
+      recording ?? usableMediaUrl(full?.recording_public_url) ?? usableMediaUrl(full?.recording_url);
+    transcript =
+      transcript ?? usableMediaUrl(full?.transcript_public_url) ?? usableMediaUrl(full?.transcript_url);
+  } catch (err) {
+    // A missing link must never cost us the call log itself.
+    console.warn('[reconcile] could not fetch run detail for media urls', { runId, err });
+  }
+  return { recording, transcript };
+}
 
 /**
  * Applies a Dograh run record to our database, using exactly the same scoring and
@@ -42,13 +88,12 @@ export async function applyRunResult(
   // bound: one live lead reached 47 log rows and retry_count 31 for 3 real calls.
   // The unique index (scripts/006) prevents duplicates from arising at all; this
   // makes the check correct even if one ever slips through.
-  const { data: existingLogs } = await supabase
-    .from('call_logs')
-    .select('id')
-    .eq('dograh_run_id', runId)
-    .limit(1);
-
-  if (existingLogs && existingLogs.length > 0) return 'duplicate';
+  // Scoped by calling backend: Vaani run 464 and voice run 464 are different
+  // calls. Unscoped, the first Vaani id that an old voice row already holds
+  // makes a real call look like a redelivery and it is dropped. See
+  // lib/call-provider.ts.
+  const { found } = await findExistingCallLog(supabase, runId);
+  if (found) return 'duplicate';
 
   const context: Record<string, any> = run.gathered_context ?? {};
   // The CSV row this call was dialled from. THIS is where Dograh puts the
@@ -141,22 +186,28 @@ export async function applyRunResult(
   const nextRetryCount = (lead.retry_count ?? 0) + 1;
   const calledAt = run.created_at ?? run.started_at ?? new Date().toISOString();
 
-  const { error: insertError } = await supabase.from('call_logs').insert({
-    lead_id: lead.id,
-    campaign_run_id: campaignRunId ?? lead.campaign_run_id ?? null,
-    dograh_run_id: runId,
-    attempt_no: nextRetryCount,
-    outcome: result.outcome,
-    duration: result.durationSeconds,
-    // Dograh's run records carry storage keys ("recordings/23.wav") in these
-    // fields and only a real link in the *_public_url variants, so prefer those
-    // and discard anything that is not fetchable.
-    recording_url: usableMediaUrl((run as any).recording_public_url) ?? usableMediaUrl(run.recording_url),
-    transcript_url: usableMediaUrl((run as any).transcript_public_url) ?? usableMediaUrl(run.transcript_url),
-    gathered_context: gatheredContext,
-    cost_info: (run as any).cost_info ?? {},
-    called_at: calledAt,
-  });
+  // Resolved once and reused by the lead update below, so a single run never
+  // costs two detail fetches.
+  const media = await resolveMediaUrls(run as Record<string, any>);
+
+  const { error: insertError } = await supabase.from('call_logs').insert(
+    await withProvider(supabase, {
+      lead_id: lead.id,
+      campaign_run_id: campaignRunId ?? lead.campaign_run_id ?? null,
+      dograh_run_id: runId,
+      attempt_no: nextRetryCount,
+      outcome: result.outcome,
+      duration: result.durationSeconds,
+      // Dograh's run records carry storage keys ("recordings/23.wav") in these
+      // fields and only a real link in the *_public_url variants, which the LIST
+      // endpoint omits entirely - see resolveMediaUrls.
+      recording_url: media.recording,
+      transcript_url: media.transcript,
+      gathered_context: gatheredContext,
+      cost_info: (run as any).cost_info ?? {},
+      called_at: calledAt,
+    }),
+  );
 
   if (insertError) {
     if (insertError.code === '23505') return 'duplicate';
@@ -188,10 +239,8 @@ export async function applyRunResult(
     update.score = result.score;
     update.qualification = result.qualification;
     update.qual_data = gatheredContext;
-    const recording = usableMediaUrl((run as any).recording_public_url) ?? usableMediaUrl(run.recording_url);
-    const transcript = usableMediaUrl((run as any).transcript_public_url) ?? usableMediaUrl(run.transcript_url);
-    if (recording) update.recording_url = recording;
-    if (transcript) update.transcript_url = transcript;
+    if (media.recording) update.recording_url = media.recording;
+    if (media.transcript) update.transcript_url = media.transcript;
     if (signals.budget) update.budget = signals.budget;
     // Never on a solar call: property_type holds the LOAN type, and the solar
     // answers belong in qual_data where the dashboard reads them.

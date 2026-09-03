@@ -6,6 +6,7 @@ import { getBillingConfig, postDebit, toCredits } from '@/lib/billing';
 import { meterSingleRun } from '@/lib/billing-meter';
 import { enforceBalanceGuard } from '@/lib/billing-guard';
 import { getMaxRetries } from '@/lib/call-behavior';
+import { findExistingCallLog, withProvider } from '@/lib/call-provider';
 import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import { DEFAULT_VERTICAL, isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
@@ -162,14 +163,13 @@ export async function POST(request: Request) {
     const supabase = createServerClient();
 
     // --- Idempotency pre-check -------------------------------------------
+    // Scoped by calling backend. A run id is unique only within one backend,
+    // and Vaani's numbering has already reached ids the old one used, so an
+    // unscoped check reports a brand new call as "Already processed" and drops
+    // it with a 200. See lib/call-provider.ts.
     if (runId) {
-      const { data: existingLog } = await supabase
-        .from('call_logs')
-        .select('id')
-        .eq('dograh_run_id', runId)
-        .maybeSingle();
-
-      if (existingLog) {
+      const { found } = await findExistingCallLog(supabase, runId);
+      if (found) {
         return NextResponse.json({ message: 'Already processed', duplicate: true }, { status: 200 });
       }
     }
@@ -312,19 +312,21 @@ export async function POST(request: Request) {
     // This insert is the idempotency barrier. If a unique index exists on
     // dograh_run_id, a concurrent duplicate delivery fails here with 23505 and we
     // stop - so the lead is never scored or incremented twice.
-    const { error: insertError } = await supabase.from('call_logs').insert({
-      lead_id: lead.id,
-      campaign_run_id: lead.campaign_run_id ?? null,
-      dograh_run_id: runId,
-      attempt_no: nextRetryCount,
-      outcome: result.outcome,
-      duration: result.durationSeconds,
-      recording_url: recording,
-      transcript_url: transcript,
-      gathered_context: gatheredContext,
-      cost_info: raw?.cost_info ?? {},
-      called_at: calledAt,
-    });
+    const { error: insertError } = await supabase.from('call_logs').insert(
+      await withProvider(supabase, {
+        lead_id: lead.id,
+        campaign_run_id: lead.campaign_run_id ?? null,
+        dograh_run_id: runId,
+        attempt_no: nextRetryCount,
+        outcome: result.outcome,
+        duration: result.durationSeconds,
+        recording_url: recording,
+        transcript_url: transcript,
+        gathered_context: gatheredContext,
+        cost_info: raw?.cost_info ?? {},
+        called_at: calledAt,
+      }),
+    );
 
     if (insertError) {
       if (insertError.code === '23505') {

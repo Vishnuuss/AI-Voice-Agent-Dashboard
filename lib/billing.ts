@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
+import { LEGACY_PROVIDER } from './call-provider';
 
 /**
  * The billing engine.
@@ -50,6 +51,11 @@ export interface MeteredCall {
   usage_info: Record<string, any> | null;
   campaign_id?: number | null;
   called_at?: string;
+  /**
+   * Which backend issued `dograh_run_id`. Absent until 010 is applied, and
+   * absent means the old backend, which is what every pre-cutover row is.
+   */
+  provider?: string | null;
 }
 
 const DEFAULTS = {
@@ -234,7 +240,17 @@ export function gstOn(credits: number, ratePercent: number = GST_RATE_PERCENT): 
  * sweep ever compute it differently, both post and the client is charged twice
  * for one call.
  */
-export function debitIdempotencyKey(dograhRunId: number): string {
+export function debitIdempotencyKey(dograhRunId: number, provider?: string): string {
+  // The historical format is preserved for the old backend on purpose. Every
+  // charge posted before the 2026-09-03 cutover carries `call:run:<id>`, and
+  // rewriting the shape would make a thousand already-billed calls look unbilled
+  // to the next sweep, which would then charge the client for them a second
+  // time. Only the new backend gets a namespaced key — which is what stops a
+  // Vaani call being waved through as "already billed" because voice used that
+  // run id in August.
+  if (provider && provider !== LEGACY_PROVIDER) {
+    return `call:${provider}:run:${dograhRunId}`;
+  }
   return `call:run:${dograhRunId}`;
 }
 
@@ -375,7 +391,10 @@ export async function postDebit(
     const minutes = Math.round(billedSeconds / 60);
 
     const { data, error } = await billing.rpc('post_credit_entry', {
-      p_idempotency_key: debitIdempotencyKey(call.dograh_run_id),
+      // `call.provider` is present once 010 is applied; before that it is
+      // undefined and the key keeps its historical shape, which is correct for
+      // every row that predates the cutover.
+      p_idempotency_key: debitIdempotencyKey(call.dograh_run_id, call.provider ?? undefined),
       p_entry_type: 'call_debit',
       p_amount_milli: -amountMilli,
       p_ledger_secret: process.env.LEDGER_SECRET ?? '',
