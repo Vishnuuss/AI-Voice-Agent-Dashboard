@@ -2967,9 +2967,23 @@ function ReportsPage({
   )
 }
 
-const PROMPT_BLOCKS: { key: "global" | "start" | "agenda" | "end"; label: string; hint: string }[] = [
+/**
+ * Only the blocks the loaded agent actually has are rendered, so this list is a
+ * superset of two different agent shapes.
+ *
+ * The four BS Wealth agents on Vaani are single-prompt: one node holding an
+ * opening line and a script, and no global/agenda/end nodes at all. They
+ * therefore show "Opening line" and "Agent script" and nothing else. The older
+ * four-node agents show the other three instead and have no separate script.
+ */
+const PROMPT_BLOCKS: { key: "global" | "start" | "script" | "agenda" | "end"; label: string; hint: string }[] = [
   { key: "global", label: "Global rules", hint: "Applied to every turn of the call — tone, language, what never to say." },
-  { key: "start", label: "Opening line", hint: "The first thing the agent says, and how it reacts to yes/no/busy." },
+  { key: "start", label: "Opening line", hint: "The first thing the agent says, word for word, before the customer has spoken." },
+  {
+    key: "script",
+    label: "Agent script",
+    hint: "Everything after the opening line — what to ask, in what order, how to handle objections, and when to hand off.",
+  },
   { key: "agenda", label: "Main questions", hint: "What the agent asks once the customer shows interest." },
   { key: "end", label: "Closing line", hint: "The last thing the agent says before hanging up." },
 ]
@@ -3271,7 +3285,12 @@ function AIAgentPage({
           {promptsLoading && !promptsError && Object.keys(prompts).length === 0 ? (
             <p className="text-sm text-muted-foreground">Loading the live script…</p>
           ) : (
-            PROMPT_BLOCKS.map((block) => (
+            // Only what this agent actually has. Rendering all five would put
+            // three permanently empty boxes ("Global rules", "Main questions",
+            // "Closing line") under every single-prompt agent, which reads as
+            // the script having gone missing rather than the agent not having
+            // those parts.
+            PROMPT_BLOCKS.filter((block) => prompts[block.key] !== undefined).map((block) => (
               <div key={block.key} className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-medium" htmlFor={`prompt-${block.key}`}>
@@ -3288,7 +3307,12 @@ function AIAgentPage({
                 <p className="text-xs text-muted-foreground">{block.hint}</p>
                 <textarea
                   id={`prompt-${block.key}`}
-                  className="flex min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  // The script runs to several thousand characters; the opening
+                  // line is one sentence. Same box for both makes the script
+                  // unreadable and unreviewable.
+                  className={`flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ${
+                    block.key === "script" ? "min-h-[420px] font-mono leading-relaxed" : "min-h-[110px]"
+                  }`}
                   value={prompts[block.key] ?? ""}
                   onChange={(e) => setPrompts((prev) => ({ ...prev, [block.key]: e.target.value }))}
                 />

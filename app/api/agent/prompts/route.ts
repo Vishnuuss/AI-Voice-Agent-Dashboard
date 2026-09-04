@@ -18,8 +18,43 @@ const NODE_TYPE_TO_KEY: Record<string, 'global' | 'start' | 'agenda' | 'end'> = 
   endCall: 'end',
 };
 
-const PROMPT_KEYS = ['global', 'start', 'agenda', 'end'] as const;
-const MAX_PROMPT_LENGTH = 4000;
+const PROMPT_KEYS = ['global', 'start', 'script', 'agenda', 'end'] as const;
+
+/**
+ * The whole script has to fit.
+ *
+ * This was 4000, which is SHORTER THAN THE LOAN AGENT'S SCRIPT (4302 characters
+ * on 2026-09-04). Any attempt to save it was rejected as "too long" - so on the
+ * agents that matter the field could not be edited at all, only broken.
+ */
+const MAX_PROMPT_LENGTH = 20_000;
+
+/**
+ * A Vaani agent keeps its opening line and its instructions in two different
+ * fields of ONE node, and they must never be confused for each other.
+ *
+ * All four BS Wealth agents are single-prompt: one `startCall` node with
+ * `greeting_type: 'text'`, where `data.greeting` is the ~90-character line the
+ * caller hears first and `data.prompt` is the 2,000-4,300 character script that
+ * drives the rest of the call.
+ *
+ * This route was written for the older four-node graph, where a start node had
+ * only one piece of text worth editing. That assumption did two things here:
+ *
+ *  1. `readNodeText` returns the greeting and stops, so the AI Agent page showed
+ *     an 88-character opening line and NOTHING ELSE. The actual script was not
+ *     hidden behind a scroll - it was never sent to the browser.
+ *  2. Far worse, the save path set `node.data.prompt = start` as well as the
+ *     greeting, then published. Editing the opening line and pressing save would
+ *     have overwritten the entire 4,302-character loan script with the greeting
+ *     and put that live on the phone line.
+ *
+ * So the two fields are now addressed separately: `start` is the greeting,
+ * `script` is the instructions.
+ */
+function isSeparateGreetingNode(node: any): boolean {
+  return node?.type === 'startCall' && node?.data?.greeting_type === 'text';
+}
 
 /**
  * What the caller actually HEARS from a node, which is not always `data.prompt`.
@@ -102,7 +137,13 @@ export async function GET(request: Request) {
     const prompts: Record<string, string> = {};
     for (const node of workflow.workflow_definition?.nodes ?? []) {
       const key = NODE_TYPE_TO_KEY[node.type];
-      if (key) prompts[key] = readNodeText(node);
+      if (!key) continue;
+      prompts[key] = readNodeText(node);
+      // On a single-prompt agent the instructions are a second, much larger
+      // field on the same node. Without this the page shows only the greeting.
+      if (isSeparateGreetingNode(node)) {
+        prompts.script = node.data?.prompt ?? '';
+      }
     }
 
     return NextResponse.json({
@@ -157,10 +198,25 @@ export async function PUT(request: Request) {
     let changed = 0;
     for (const node of definition?.nodes ?? []) {
       const key = NODE_TYPE_TO_KEY[node.type];
+
+      if (isSeparateGreetingNode(node)) {
+        // Two independent fields. Writing `start` into `prompt` here would
+        // replace the whole script with the opening line and publish it.
+        if (updates.start !== undefined) {
+          node.data.greeting = updates.start;
+          changed++;
+        }
+        if (updates.script !== undefined) {
+          node.data.prompt = updates.script;
+          changed++;
+        }
+        continue;
+      }
+
       if (key && updates[key] !== undefined) {
         node.data.prompt = updates[key];
-        // A startCall node in `text` mode speaks `greeting`, not `prompt`.
-        // Writing both is what makes the edit actually reach the caller.
+        // A startCall node in `llm` mode generates its greeting from the
+        // prompt, so there the two really are one piece of text.
         if (node.type === 'startCall') node.data.greeting = updates[key];
         changed++;
       }
