@@ -48,15 +48,21 @@ update public.call_logs
  where provider is null;
 
 -- ─── Step 2: swap the uniqueness ────────────────────────────────────────────
--- Drop the single-column index FIRST. Leaving it in place would keep rejecting
--- a Vaani run whose id an old voice row already holds, which is the entire bug.
+-- The single-column uniqueness has to go: leaving it in place would keep
+-- rejecting a Vaani run whose id an old voice row already holds, which is the
+-- entire bug.
+--
+-- The CONSTRAINT is dropped first, because Postgres refuses to drop an index
+-- that backs one ("cannot drop index ... because constraint ... requires it")
+-- and `drop index if exists` does not skip that case - it aborts the migration.
+-- 006 created a bare index here so this ran in either order, but 010 hit
+-- exactly that error on call_usage.
+alter table public.call_logs
+  drop constraint if exists call_logs_dograh_run_id_key;
+
 drop index if exists call_logs_dograh_run_id_key;
 drop index if exists call_logs_dograh_run_id_idx;
 drop index if exists call_logs_dograh_run_id_unique;
-
--- 001 may have declared it as a table CONSTRAINT rather than a bare index.
-alter table public.call_logs
-  drop constraint if exists call_logs_dograh_run_id_key;
 
 create unique index if not exists call_logs_provider_run_unique
   on public.call_logs (provider, dograh_run_id);

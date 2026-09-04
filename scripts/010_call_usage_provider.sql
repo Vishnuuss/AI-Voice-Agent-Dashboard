@@ -38,10 +38,22 @@ update public.call_usage
 
 -- The upsert's conflict target has to match this index exactly, so the single
 -- column version must go or PostgREST will keep resolving to it.
-drop index if exists call_usage_dograh_run_id_key;
-drop index if exists call_usage_dograh_run_id_idx;
+--
+-- THE CONSTRAINT COMES FIRST. On this table the uniqueness was declared as a
+-- table constraint, and Postgres refuses to drop the index underneath one:
+--
+--   ERROR: 2BP01: cannot drop index call_usage_dograh_run_id_key because
+--   constraint call_usage_dograh_run_id_key on table call_usage requires it
+--
+-- `drop index if exists` does NOT skip that case - the index exists, it is
+-- simply not droppable on its own - so the whole migration aborts. Dropping the
+-- constraint takes its index with it, and the drops below then clean up any
+-- plain index left over from an earlier hand-made attempt.
 alter table public.call_usage
   drop constraint if exists call_usage_dograh_run_id_key;
+
+drop index if exists call_usage_dograh_run_id_key;
+drop index if exists call_usage_dograh_run_id_idx;
 
 create unique index if not exists call_usage_provider_run_unique
   on public.call_usage (provider, dograh_run_id);
