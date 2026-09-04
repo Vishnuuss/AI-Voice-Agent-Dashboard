@@ -71,13 +71,21 @@ export function resetProviderCapabilityCache(): void {
 export async function findExistingCallLog(
   supabase: SupabaseClient,
   runId: number,
-): Promise<{ found: boolean }> {
-  let query = supabase.from('call_logs').select('id').eq('dograh_run_id', runId);
+): Promise<{ found: boolean; row: Record<string, any> | null }> {
+  // The row itself, not just its existence: the reconcile sweep needs to see
+  // whether what is already stored is COMPLETE. The webhook fires at hang-up and
+  // can land before the provider has finalised duration and uploaded the
+  // recording, so "a row exists" does not mean "the call is recorded properly".
+  let query = supabase
+    .from('call_logs')
+    .select('id, duration, recording_url, transcript_url')
+    .eq('dograh_run_id', runId);
   if (await hasProviderColumn(supabase, 'call_logs')) {
     query = query.eq('provider', callProvider());
   }
   const { data } = await query.limit(1);
-  return { found: Boolean(data && data.length > 0) };
+  const row = data && data.length > 0 ? (data[0] as Record<string, any>) : null;
+  return { found: Boolean(row), row };
 }
 
 /**

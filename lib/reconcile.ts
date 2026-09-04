@@ -63,6 +63,44 @@ async function resolveMediaUrls(
 }
 
 /**
+ * Repairs a call log that was written before the provider had finished the call.
+ *
+ * Fills in ONLY what is missing or provably wrong: a zero duration when the run
+ * reports real talk time, and the recording/transcript links when the row has
+ * none. Everything judgemental — score, qualification, lead status, retry_count,
+ * notes — is left exactly as it is, because re-applying those on every ten-minute
+ * tick is precisely the runaway that migration 006 existed to clean up.
+ */
+async function backfillIncompleteLog(
+  supabase: SupabaseClient,
+  existing: Record<string, any>,
+  run: Record<string, any>,
+): Promise<'duplicate' | 'backfilled'> {
+  const patch: Record<string, any> = {};
+
+  const realDuration = Number(run?.cost_info?.call_duration_seconds ?? run?.duration ?? 0);
+  if (Number.isFinite(realDuration) && realDuration > 0 && !(Number(existing.duration) > 0)) {
+    patch.duration = Math.round(realDuration);
+  }
+
+  if (!usableMediaUrl(existing.recording_url) || !usableMediaUrl(existing.transcript_url)) {
+    const media = await resolveMediaUrls(run);
+    if (media.recording && !usableMediaUrl(existing.recording_url)) patch.recording_url = media.recording;
+    if (media.transcript && !usableMediaUrl(existing.transcript_url)) patch.transcript_url = media.transcript;
+  }
+
+  if (Object.keys(patch).length === 0) return 'duplicate';
+
+  const { error } = await supabase.from('call_logs').update(patch).eq('id', existing.id);
+  if (error) {
+    console.error('[reconcile] could not backfill call_log', { id: existing.id, error });
+    return 'duplicate';
+  }
+  console.info('[reconcile] backfilled call_log', { id: existing.id, fields: Object.keys(patch) });
+  return 'backfilled';
+}
+
+/**
  * Applies a Dograh run record to our database, using exactly the same scoring and
  * column names as the webhook handler.
  *
@@ -77,7 +115,7 @@ export async function applyRunResult(
   // Read once per sweep by the caller and threaded through, rather than
   // re-querying settings for every run record in a large campaign.
   maxRetries?: number,
-): Promise<'inserted' | 'duplicate' | 'no_lead' | 'error'> {
+): Promise<'inserted' | 'duplicate' | 'backfilled' | 'no_lead' | 'error'> {
   const runId = run.id;
   if (runId == null) return 'error';
 
@@ -92,8 +130,22 @@ export async function applyRunResult(
   // calls. Unscoped, the first Vaani id that an old voice row already holds
   // makes a real call look like a redelivery and it is dropped. See
   // lib/call-provider.ts.
-  const { found } = await findExistingCallLog(supabase, runId);
-  if (found) return 'duplicate';
+  const { found, row: existingLog } = await findExistingCallLog(supabase, runId);
+  if (found) {
+    // A row already exists, but it is not necessarily RIGHT.
+    //
+    // The webhook fires at hang-up, which can be before the provider has
+    // finalised the duration or finished uploading the recording. Run 571 landed
+    // that way on 2026-09-04: a 29-second call stored as `duration: 0` with no
+    // recording and no transcript, and because this function returned early the
+    // sweep never corrected it. The dashboard showed a real conversation as a
+    // zero-second call for ever.
+    //
+    // Only the facts are repaired. Scoring, retry_count and the lead's status
+    // are deliberately NOT re-run: re-scoring on every tick is the bug that
+    // migration 006 had to clean up after.
+    return backfillIncompleteLog(supabase, existingLog!, run as Record<string, any>);
+  }
 
   const context: Record<string, any> = run.gathered_context ?? {};
   // The CSV row this call was dialled from. THIS is where Dograh puts the

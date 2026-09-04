@@ -157,6 +157,25 @@ export function isBillableCall(
 }
 
 /**
+ * Is this run finished enough to be charged on?
+ *
+ * Rows in call_usage are insert-if-absent, so the FIRST write decides what the
+ * client is billed, permanently. A run read mid-call arrives with no duration
+ * and no disposition; postDebit then sees zero talk time, stamps billed_at to
+ * stop reconsidering it, and a real conversation is settled at zero for ever.
+ *
+ * Measured on run 571 (2026-09-04): a 29-second call that began at 12:59:40 was
+ * swept at 13:00:10, while it was still connected, and billed as nothing.
+ *
+ * `is_completed` is the test rather than `duration > 0`, because a FINISHED call
+ * with no talk time is a genuine no-answer and should be recorded once as
+ * unbillable. An unfinished one is simply left for the next tick.
+ */
+export function isMeterable(run: any): boolean {
+  return Boolean(run?.is_completed);
+}
+
+/**
  * Billed seconds: a minimum charge, then rounded UP to the next whole minute.
  *
  *   14s  ->  60s  ->  4.00 credits

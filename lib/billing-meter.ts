@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { callProvider, hasProviderColumn } from './call-provider';
 import { dograh } from './dograh';
-import { hashPhone } from './billing';
+import { hashPhone, isMeterable } from './billing';
 import { normaliseOutcome } from './call-scoring';
 
 /**
@@ -80,6 +80,8 @@ export interface MeterResult {
   inserted: number;
   alreadyKnown: number;
   errors: number;
+  /** Runs skipped because the call had not finished yet; metered on a later tick. */
+  inFlight: number;
 }
 
 /**
@@ -94,7 +96,7 @@ export async function meterCampaign(
   opts: { sinceIso?: string; maxPages?: number; pageSize?: number; accountId?: string } = {},
 ): Promise<Omit<MeterResult, 'campaignsScanned'>> {
   const { sinceIso, maxPages = 20, pageSize = 100, accountId = 'default' } = opts;
-  const out = { runsSeen: 0, inserted: 0, alreadyKnown: 0, errors: 0 };
+  const out = { runsSeen: 0, inserted: 0, alreadyKnown: 0, errors: 0, inFlight: 0 };
 
   for (let page = 1; page <= maxPages; page += 1) {
     let runs: any[] = [];
@@ -110,6 +112,13 @@ export async function meterCampaign(
 
     const rows = runs
       .filter((run) => Number.isFinite(Number(run?.id)))
+      // A call still ringing or still talking must NOT be metered yet -- see
+      // isMeterable. meterSingleRun already refused this case; this path did not.
+      .filter((run) => {
+        if (isMeterable(run)) return true;
+        out.inFlight += 1;
+        return false;
+      })
       .map((run) => ({
         account_id: accountId,
         dograh_run_id: Number(run.id),
@@ -264,7 +273,7 @@ export async function meterAllCampaigns(
   opts: { sinceIso?: string; accountId?: string } = {},
 ): Promise<MeterResult> {
   const total: MeterResult = {
-    campaignsScanned: 0, runsSeen: 0, inserted: 0, alreadyKnown: 0, errors: 0,
+    campaignsScanned: 0, runsSeen: 0, inserted: 0, alreadyKnown: 0, errors: 0, inFlight: 0,
   };
 
   let campaigns: any[] = [];

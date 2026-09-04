@@ -31,7 +31,10 @@ async function reconcileCampaign(
   maxRetries: number,
 ) {
   const providerId = Number(campaign.dograh_campaign_id);
-  const stats = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
+  // `backfilled` counts calls whose row already existed but was written
+  // before the provider finalised it - a zero duration or a missing
+  // recording, repaired on this tick.
+  const stats = { inserted: 0, duplicate: 0, backfilled: 0, no_lead: 0, error: 0 };
 
   if (!Number.isFinite(providerId)) return stats;
 
