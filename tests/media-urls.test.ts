@@ -18,7 +18,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { usableMediaUrl } from '../lib/call-context.ts';
+import { usableMediaUrl, extractCallSignals } from '../lib/call-context.ts';
 
 describe('usableMediaUrl', () => {
   test('accepts a real https link', () => {
@@ -74,5 +74,44 @@ describe('usableMediaUrl', () => {
       usableMediaUrl(fromDetail.recording_public_url) ?? usableMediaUrl(fromDetail.recording_url),
       fromDetail.recording_public_url,
     );
+  });
+});
+
+/**
+ * A real-estate call recovered by the reconcile sweep must fill the same field
+ * the webhook fills.
+ *
+ * The webhook sends `property_kind`; the sweep reads the run's own
+ * gathered_context, where the extraction schema calls it `property_type`. Only
+ * the webhook path populated realestate_property_type, so the lead card's
+ * Property column was blank for every real-estate call the sweep recovered.
+ * Seen on run 579 (2026-09-04), where "plot" reached the note as "loan: plot".
+ */
+describe('real-estate property type, both delivery paths', () => {
+  test('the webhook shape (property_kind) is read', () => {
+    const s = extractCallSignals({ vertical: 'realestate', property_kind: 'plot' });
+    assert.equal(s.realestate_property_type, 'plot');
+  });
+
+  test('the reconcile shape (property_type) is read too', () => {
+    const s = extractCallSignals({
+      vertical: 'realestate',
+      gathered_context: { property_type: 'plot', location: 'Andhra Pradesh' },
+    });
+    assert.equal(s.realestate_property_type, 'plot');
+    assert.equal(s.realestate_location, 'Andhra Pradesh');
+  });
+
+  test('a LOAN call is unaffected — property_type stays the loan alias', () => {
+    // This is the collision the `property_kind` rename existed to avoid, so the
+    // gate must hold: only a real-estate call may use the bare name.
+    const s = extractCallSignals({ vertical: 'loan', gathered_context: { property_type: 'personal' } });
+    assert.equal(s.realestate_property_type, null);
+    assert.equal(s.loan_type, 'personal');
+  });
+
+  test('a SOLAR call is unaffected', () => {
+    const s = extractCallSignals({ vertical: 'solar', gathered_context: { property_type: 'own' } });
+    assert.equal(s.realestate_property_type, null);
   });
 });

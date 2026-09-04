@@ -278,12 +278,27 @@ export function extractCallSignals(raw: Record<string, any>): CallSignals {
     customer_intent: cleanString(pick(flat, ['customer_intent', 'intent', 'disposition'])),
     do_not_call: cleanBoolean(pick(flat, ['do_not_call', 'dnc', 'opt_out'])),
     summary: cleanString(pick(flat, ['summary', 'call_summary', 'crm_summary'])),
-    // Deliberately NOT 'property_type': that key is already claimed by the loan
-    // agent's loan-type alias and by parseHouseOwnership's solar check, so a
-    // real-estate call sending "plot" under that name could get filed as a loan
-    // type or misread as a house-ownership answer. The real-estate webhook sends
-    // this field as `property_kind` for exactly that reason.
-    realestate_property_type: cleanString(pick(flat, ['property_kind', 'realestate_property_type'])),
+    // `property_type` is accepted ONLY on a real-estate call.
+    //
+    // The webhook sends this as `property_kind` precisely because the bare name
+    // is already claimed by the loan agent's loan-type alias and by
+    // parseHouseOwnership's solar check -- on those verticals "plot" under that
+    // name would be filed as a loan type or misread as a house-ownership answer.
+    //
+    // But the reconcile sweep does not read the webhook payload; it reads the
+    // run's own gathered_context, where the field is named `property_type`
+    // because that is what the extraction schema calls it. So a real-estate call
+    // recovered by the sweep left this null while the webhook path filled it,
+    // and the lead card's Property column was empty for exactly those calls.
+    // Seen on run 579 (2026-09-04): "plot" reached the note as "loan: plot".
+    //
+    // Gating on the vertical keeps the collision impossible: a loan or solar
+    // call never reaches this alias.
+    realestate_property_type: cleanString(
+      pick(flat, vertical === 'realestate'
+        ? ['property_kind', 'realestate_property_type', 'property_type']
+        : ['property_kind', 'realestate_property_type']),
+    ),
     realestate_deal_type: cleanString(pick(flat, ['deal_type', 'realestate_deal_type'])),
     realestate_location: cleanString(pick(flat, ['location', 'realestate_location', 'area'])),
     realestate_timeline: cleanString(pick(flat, ['timeline', 'realestate_timeline'])),
