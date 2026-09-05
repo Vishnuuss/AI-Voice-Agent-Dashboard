@@ -855,7 +855,7 @@ function CallCardMobile({
         <span>Attempt #{call.attempt_no ?? 1}</span>
         {call.recording_url && !selectable && (
           <a
-            href={call.recording_url}
+            href={`/api/calls/${call.id}/recording`}
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
@@ -1738,7 +1738,7 @@ function CallsPage({
                     <TableCell>
                       {call.recording_url ? (
                         <a
-                          href={call.recording_url}
+                          href={`/api/calls/${call.id}/recording`}
                           target="_blank"
                           rel="noreferrer"
                           onClick={(e) => e.stopPropagation()}
@@ -3990,7 +3990,7 @@ function LeadDetailSheet({
                         <span className="text-xs text-muted-foreground">{formatDateTime(call.called_at)}</span>
                       </div>
 
-                      {call.recording_url && <audio controls preload="none" className="w-full" src={call.recording_url} />}
+                      {call.recording_url && <audio controls preload="none" className="w-full" src={`/api/calls/${call.id}/recording`} />}
 
                       {call.transcript_url ? (
                         <div className="flex items-center gap-3">
@@ -4120,7 +4120,7 @@ function LeadDetailSheet({
                               </div>
 
                               {call.recording_url && (
-                                <audio controls preload="none" className="mt-2 w-full" src={call.recording_url} />
+                                <audio controls preload="none" className="mt-2 w-full" src={`/api/calls/${call.id}/recording`} />
                               )}
 
                               {call.transcript_url ? (
