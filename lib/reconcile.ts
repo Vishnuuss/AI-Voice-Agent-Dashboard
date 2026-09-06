@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getMaxRetries } from '@/lib/call-behavior';
 import { dograh } from '@/lib/dograh';
-import { findExistingCallLog, withProvider } from '@/lib/call-provider';
+import { callProvider, findExistingCallLog, hasProviderColumn, withProvider } from '@/lib/call-provider';
 import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import {
@@ -464,12 +464,28 @@ export async function repairIncompleteCallLogs(
 
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
 
-  const { data: rows, error } = await supabase
+  let query = supabase
     .from('call_logs')
     .select('id, lead_id, dograh_run_id, duration, recording_url, transcript_url, gathered_context, called_at')
     .gte('called_at', since)
     .not('dograh_run_id', 'is', null)
-    .or('duration.is.null,duration.eq.0,recording_url.is.null,transcript_url.is.null')
+    .or('duration.is.null,duration.eq.0,recording_url.is.null,transcript_url.is.null');
+
+  // ONLY rows from the backend we are about to ask. A run id identifies a call
+  // just within one backend, and this pass repairs a row from whatever run comes
+  // back for that id - so without this filter it is a data-corruption bug
+  // waiting for a clock to tick.
+  //
+  // Today the old backend's rows (runs 2091-2097) merely 404 on Vaani, because
+  // Vaani is only at ~800. When Vaani reaches 2091 they would stop 404-ing and
+  // start returning a DIFFERENT customer's call, which this pass would then
+  // merge into an August row. Same collision as scripts/009; it has to be
+  // handled everywhere a run id is used as an identity, not just at insert.
+  if (await hasProviderColumn(supabase, 'call_logs')) {
+    query = query.eq('provider', callProvider());
+  }
+
+  const { data: rows, error } = await query
     .order('called_at', { ascending: false })
     .limit(limit);
 
@@ -508,7 +524,15 @@ export async function repairIncompleteCallLogs(
       const verdict = await backfillIncompleteLog(supabase, row as Record<string, any>, run);
       if (verdict === 'backfilled') out.repaired += 1;
       else out.skipped += 1;
-    } catch (err) {
+    } catch (err: any) {
+      // A 404 means "no such run on this backend", which is a normal outcome for
+      // a row this pass should not have been asked about - not a failure. Left
+      // in `errors` it would report six permanent errors every tick and hide a
+      // real one.
+      if (err?.status === 404) {
+        out.skipped += 1;
+        continue;
+      }
       console.warn('[reconcile] repair failed for one call log', { run: runId, err });
       out.errors += 1;
     }

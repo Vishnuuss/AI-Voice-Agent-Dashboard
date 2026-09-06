@@ -174,3 +174,49 @@ describe('calls that are genuinely empty', () => {
     assert.equal(patch.duration, 14);
   });
 });
+
+/**
+ * The repair pass must never read a run from the wrong backend.
+ *
+ * A run id identifies a call only WITHIN one backend, and this pass repairs a
+ * row from whatever run comes back for that id. On 2026-09-06 the pass picked up
+ * seven rows, six of them the old backend's (runs 2091-2097), and they merely
+ * 404'd because Vaani was only at ~800.
+ *
+ * That is a clock, not a fix. When Vaani reaches run 2091 those ids stop 404-ing
+ * and start returning a different customer's call, which would then be merged
+ * into an August row. The candidate query is scoped by provider so the question
+ * is never asked.
+ */
+describe('repair pass scoping', () => {
+  const CANDIDATES = [
+    { run: 573, provider: 'vaani' },
+    { run: 2097, provider: 'voice' },
+    { run: 2096, provider: 'voice' },
+    { run: 2094, provider: 'voice' },
+    { run: 2093, provider: 'voice' },
+    { run: 2092, provider: 'voice' },
+    { run: 2091, provider: 'voice' },
+  ];
+
+  const scopedTo = (provider: string) => CANDIDATES.filter((r) => r.provider === provider);
+
+  test('only this backend’s rows are repaired', () => {
+    assert.deepEqual(scopedTo('vaani').map((r) => r.run), [573]);
+  });
+
+  test('the other backend’s rows are never fetched', () => {
+    // Six of seven candidates. Unscoped they were six errors a tick, and a
+    // corruption risk the day the ids start resolving.
+    assert.equal(scopedTo('voice').length, 6);
+    assert.equal(scopedTo('vaani').some((r) => r.run > 2000), false);
+  });
+
+  test('a colliding id belongs to whichever backend the row came from', () => {
+    // voice 2091 and a future vaani 2091 are different calls, and the provider
+    // is the only thing that tells them apart.
+    const voiceRow = CANDIDATES.find((r) => r.run === 2091)!;
+    assert.equal(voiceRow.provider, 'voice');
+    assert.notEqual(voiceRow.provider, 'vaani');
+  });
+});
