@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase-server';
 import { getMaxRetries } from '@/lib/call-behavior';
 import { DograhClient, dograh } from '@/lib/dograh';
-import { applyRunResult, isAuthorisedCron } from '@/lib/reconcile';
+import { applyRunResult, isAuthorisedCron, repairIncompleteCallLogs } from '@/lib/reconcile';
 import { isTerminal, mapDograhStatus } from '@/lib/campaign-state';
 import { createBillingClient, isBillingConfigured } from '@/lib/supabase-billing';
 import { getBillingConfig, sweepUnbilledCalls } from '@/lib/billing';
@@ -111,7 +111,7 @@ async function handler(request: Request) {
       return NextResponse.json({ error: 'Failed to load campaigns' }, { status: 500 });
     }
 
-    const totals = { inserted: 0, duplicate: 0, no_lead: 0, error: 0 };
+    const totals = { inserted: 0, duplicate: 0, backfilled: 0, no_lead: 0, error: 0 };
     const maxRetries = await getMaxRetries(supabase);
 
     for (const campaign of campaigns ?? []) {
@@ -123,6 +123,18 @@ async function handler(request: Request) {
         totals.error += 1;
       }
     }
+
+    // --- Repair pass, independent of campaign status ------------------------
+    // The loop above only visits campaigns that are still queued/running/paused.
+    // 101 of 113 campaign_runs are `completed`, and a completed campaign is never
+    // looked at again - so a row written thin by the webhook under a campaign
+    // that has since finished stays thin for ever. That is how run 798 kept
+    // duration 0 and a score of 0 for a 70-second call that qualified at 100.
+    //
+    // This finds incomplete rows directly and repairs them from their run,
+    // whatever their campaign is doing. Bounded so a long history cannot make a
+    // tick run away.
+    const repaired = await repairIncompleteCallLogs(supabase);
 
     const releasedLeads = await releaseStuckLeads(supabase);
 
@@ -182,6 +194,7 @@ async function handler(request: Request) {
       success: true,
       campaigns_checked: campaigns?.length ?? 0,
       ...totals,
+      repaired_call_logs: repaired,
       released_stuck_leads: releasedLeads,
       trash_batches_purged: trashPurged,
       billing: billingReport,

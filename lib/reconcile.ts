@@ -18,6 +18,21 @@ import type { DograhRunRecord } from '@/types';
 
 const MAX_NOTES_LENGTH = 2_000;
 
+/** jsonb arrives as an object normally and as a string on some paths; accept both. */
+function parseJsonColumn(value: unknown): Record<string, any> {
+  if (!value) return {};
+  if (typeof value === 'object') return value as Record<string, any>;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 /**
  * The recording and transcript links for a run, which the campaign-runs LIST
  * cannot give us.
@@ -63,13 +78,36 @@ async function resolveMediaUrls(
 }
 
 /**
- * Repairs a call log that was written before the provider had finished the call.
+ * Completes a call log that was written before the provider had finished.
  *
- * Fills in ONLY what is missing or provably wrong: a zero duration when the run
- * reports real talk time, and the recording/transcript links when the row has
- * none. Everything judgemental — score, qualification, lead status, retry_count,
- * notes — is left exactly as it is, because re-applying those on every ten-minute
- * tick is precisely the runaway that migration 006 existed to clean up.
+ * Vaani's webhook node fires at hang-up. When `perform_final_variable_extraction`
+ * has not finished yet, every `{{gathered_context.X}}` in the payload renders
+ * empty and `{{cost_info.call_duration_seconds}}` renders 0 - and that is what
+ * gets stored as the record of the call. It is a race, so it hits some calls and
+ * not others, which is exactly what makes it hard to notice.
+ *
+ * Run 798 (solar, 2026-09-06) is the case this was written for. Vaani had a
+ * 70-second call with `house_ownership: own`, `solar_planning: true`,
+ * `lead_score: 100`, a recording and a transcript. The dashboard had duration 0,
+ * no media, no answers, and a lead scored 0 - a qualified customer presented to
+ * the client as a dud.
+ *
+ * TWO kinds of repair happen here, and the distinction matters:
+ *
+ *  - FACTS (duration, media links) are filled whenever they are missing. Safe to
+ *    re-evaluate on any tick because they are copied, not judged.
+ *
+ *  - The QUALIFICATION (answers, score, lead columns) is filled at most ONCE,
+ *    and only when the stored row carries no qualification at all while the run
+ *    now does. That guard is what keeps migration 006 from coming back: after it
+ *    fires the row has a signal, so it can never fire again. `attempt_no`,
+ *    `retry_count` and the notes line are never touched here - re-counting
+ *    attempts on every ten-minute tick is what produced 47 log rows and
+ *    retry_count 31 for 3 real calls.
+ *
+ * A call where the provider itself extracted nothing (runs 793 and 795: every
+ * variable came back as "") is left alone. There is nothing to complete, and
+ * inventing a score would be worse than an honest blank.
  */
 async function backfillIncompleteLog(
   supabase: SupabaseClient,
@@ -78,6 +116,7 @@ async function backfillIncompleteLog(
 ): Promise<'duplicate' | 'backfilled'> {
   const patch: Record<string, any> = {};
 
+  // --- Facts --------------------------------------------------------------
   const realDuration = Number(run?.cost_info?.call_duration_seconds ?? run?.duration ?? 0);
   if (Number.isFinite(realDuration) && realDuration > 0 && !(Number(existing.duration) > 0)) {
     patch.duration = Math.round(realDuration);
@@ -89,6 +128,66 @@ async function backfillIncompleteLog(
     if (media.transcript && !usableMediaUrl(existing.transcript_url)) patch.transcript_url = media.transcript;
   }
 
+  // --- Qualification, once ------------------------------------------------
+  const storedContext = parseJsonColumn(existing.gathered_context);
+  const storedSignals = extractCallSignals(storedContext);
+  const runSignals = extractCallSignals(run as Record<string, any>);
+
+  const alreadyQualified = hasQualificationSignal(storedSignals);
+  const runHasAnswers = hasQualificationSignal(runSignals);
+  const completing = !alreadyQualified && runHasAnswers;
+
+  let leadPatch: Record<string, any> | null = null;
+
+  if (completing) {
+    const runContext: Record<string, any> = run.gathered_context ?? {};
+    const initial: Record<string, any> = run.initial_context ?? {};
+    const callVertical =
+      parseVertical(runContext.vertical ?? initial.vertical ?? storedContext.vertical) ?? DEFAULT_VERTICAL;
+
+    const result = scoreCall({
+      vertical: callVertical,
+      house_ownership: runSignals.house_ownership,
+      solar_planning: runSignals.solar_planning,
+      currently_investing: runSignals.currently_investing,
+      investment_type: runSignals.investment_type,
+      interested: runSignals.interested,
+      budget: runSignals.budget,
+      visit_date: runSignals.visit_date,
+      loan_type: runSignals.loan_type,
+      profession: runSignals.profession,
+      do_not_call: runSignals.do_not_call,
+      outcome:
+        run.status ??
+        runContext.mapped_call_disposition ??
+        runContext.call_disposition ??
+        (run.is_completed ? 'completed' : undefined),
+      duration: realDuration || existing.duration,
+    });
+
+    patch.gathered_context = {
+      ...storedContext,
+      ...runContext,
+      ...buildGatheredContext(runSignals, result.outcome, undefined, callVertical),
+    };
+
+    if (result.answered) {
+      leadPatch = {
+        score: result.score,
+        qualification: result.qualification,
+        qual_data: patch.gathered_context,
+      };
+      if (runSignals.budget) leadPatch.budget = runSignals.budget;
+      if (runSignals.loan_type && callVertical !== 'solar') leadPatch.property_type = runSignals.loan_type;
+      if (runSignals.house_ownership) leadPatch.house_ownership = runSignals.house_ownership;
+      if (runSignals.solar_planning !== null) leadPatch.solar_planning = runSignals.solar_planning;
+      const followUp = parseFollowUpDate(runSignals.visit_date);
+      if (followUp) leadPatch.follow_up_date = followUp;
+      if (patch.recording_url) leadPatch.recording_url = patch.recording_url;
+      if (patch.transcript_url) leadPatch.transcript_url = patch.transcript_url;
+    }
+  }
+
   if (Object.keys(patch).length === 0) return 'duplicate';
 
   const { error } = await supabase.from('call_logs').update(patch).eq('id', existing.id);
@@ -96,7 +195,21 @@ async function backfillIncompleteLog(
     console.error('[reconcile] could not backfill call_log', { id: existing.id, error });
     return 'duplicate';
   }
-  console.info('[reconcile] backfilled call_log', { id: existing.id, fields: Object.keys(patch) });
+
+  // The lead is updated only after the log write succeeded, so the two can never
+  // disagree about whether this call was completed.
+  if (leadPatch && existing.lead_id) {
+    const { error: leadError } = await supabase.from('leads').update(leadPatch).eq('id', existing.lead_id);
+    if (leadError) {
+      console.error('[reconcile] could not complete lead', { lead: existing.lead_id, error: leadError });
+    }
+  }
+
+  console.info('[reconcile] backfilled call_log', {
+    id: existing.id,
+    fields: Object.keys(patch),
+    completedQualification: completing,
+  });
   return 'backfilled';
 }
 
@@ -141,9 +254,8 @@ export async function applyRunResult(
     // sweep never corrected it. The dashboard showed a real conversation as a
     // zero-second call for ever.
     //
-    // Only the facts are repaired. Scoring, retry_count and the lead's status
-    // are deliberately NOT re-run: re-scoring on every tick is the bug that
-    // migration 006 had to clean up after.
+    // Facts are repaired whenever they are missing; the qualification is
+    // completed at most once. See backfillIncompleteLog.
     return backfillIncompleteLog(supabase, existingLog!, run as Record<string, any>);
   }
 
@@ -324,4 +436,84 @@ export function isAuthorisedCron(request: Request): boolean {
   const auth = request.headers.get('authorization');
   if (auth === `Bearer ${secret}`) return true;
   return request.headers.get('x-cron-secret') === secret;
+}
+
+/**
+ * Finds call logs that were written incomplete and completes them from their run.
+ *
+ * The campaign loop in the cron only visits campaigns that are still
+ * queued/running/paused. On 2026-09-06, 101 of 113 campaign_runs were
+ * `completed` — and a completed campaign is never revisited, so a row the
+ * webhook wrote thin under it could never be repaired. Run 798 sat at duration 0
+ * with a score of 0 for a 70-second call that had qualified at 100.
+ *
+ * So this looks for the damage directly rather than hoping a campaign is still
+ * open. A row is a candidate when it has no talk time, no recording, or no
+ * transcript. Rows with all three are already whole and are not fetched.
+ *
+ * Bounded on both sides: only recent calls, and a hard cap per tick, so a long
+ * history can never turn one tick into a crawl. Anything not reached this time
+ * is reached on the next one.
+ */
+export async function repairIncompleteCallLogs(
+  supabase: SupabaseClient,
+  opts: { sinceDays?: number; limit?: number } = {},
+): Promise<{ scanned: number; repaired: number; skipped: number; errors: number }> {
+  const { sinceDays = 7, limit = 200 } = opts;
+  const out = { scanned: 0, repaired: 0, skipped: 0, errors: 0 };
+
+  const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+
+  const { data: rows, error } = await supabase
+    .from('call_logs')
+    .select('id, lead_id, dograh_run_id, duration, recording_url, transcript_url, gathered_context, called_at')
+    .gte('called_at', since)
+    .not('dograh_run_id', 'is', null)
+    .or('duration.is.null,duration.eq.0,recording_url.is.null,transcript_url.is.null')
+    .order('called_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[reconcile] could not list incomplete call logs', error);
+    return { ...out, errors: 1 };
+  }
+
+  for (const row of rows ?? []) {
+    out.scanned += 1;
+    const runId = Number(row.dograh_run_id);
+    if (!Number.isFinite(runId)) {
+      out.skipped += 1;
+      continue;
+    }
+
+    try {
+      // The workflow id is not stored on the log, and it does not need to be:
+      // Vaani resolves a run by id and ignores the workflow in the path
+      // (verified on run 798). The configured loan workflow is a valid door.
+      const workflowId = Number(process.env.DOGRAH_WORKFLOW_ID ?? 1);
+      const run = await dograh.getWorkflowRun(workflowId, runId);
+
+      // Guard against ever repairing a row from the wrong call. Run ids repeat
+      // across backends, and this row may predate the cutover.
+      if (!run || Number(run.id) !== runId) {
+        out.skipped += 1;
+        continue;
+      }
+      // A call still in progress has nothing to give yet.
+      if (!run.is_completed) {
+        out.skipped += 1;
+        continue;
+      }
+
+      const verdict = await backfillIncompleteLog(supabase, row as Record<string, any>, run);
+      if (verdict === 'backfilled') out.repaired += 1;
+      else out.skipped += 1;
+    } catch (err) {
+      console.warn('[reconcile] repair failed for one call log', { run: runId, err });
+      out.errors += 1;
+    }
+  }
+
+  if (out.repaired > 0) console.info('[reconcile] repaired incomplete call logs', out);
+  return out;
 }

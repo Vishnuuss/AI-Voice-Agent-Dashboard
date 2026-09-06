@@ -7,6 +7,8 @@ import { meterSingleRun } from '@/lib/billing-meter';
 import { enforceBalanceGuard } from '@/lib/billing-guard';
 import { getMaxRetries } from '@/lib/call-behavior';
 import { findExistingCallLog, withProvider } from '@/lib/call-provider';
+import { dograh } from '@/lib/dograh';
+import { workflowIdFor } from '@/lib/workflow-routing';
 import { updateLead } from '@/lib/lead-update';
 import { leadStatusFor, scoreCall } from '@/lib/call-scoring';
 import { DEFAULT_VERTICAL, isWrongVerticalMatch, parseVertical } from '@/lib/verticals';
@@ -122,7 +124,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const raw = (await request.json().catch(() => null)) as Record<string, any> | null;
+    let raw = (await request.json().catch(() => null)) as Record<string, any> | null;
     if (!raw || typeof raw !== 'object') {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
@@ -132,8 +134,8 @@ export async function POST(request: Request) {
     // "Undefined" rather than being omitted - and the extracted variables may sit
     // flat on the payload or nested under gathered_context. flattenPayload +
     // extractCallSignals handle every one of those shapes.
-    const flat = flattenPayload(raw);
-    const signals = extractCallSignals(raw);
+    let flat = flattenPayload(raw);
+    let signals = extractCallSignals(raw);
 
     const runId = cleanNumber(flat.run_id ?? flat.workflow_run_id ?? flat.call_id ?? flat.id);
     const phone = cleanString(flat.phone ?? flat.phone_number ?? flat.to_number ?? flat.customer_phone);
@@ -148,7 +150,7 @@ export async function POST(request: Request) {
           flat.status ??
           flat.call_status,
       ) ?? 'completed';
-    const durationRaw =
+    let durationRaw =
       cleanNumber(flat.duration ?? flat.call_duration_seconds ?? flat.call_duration) ??
       cleanNumber(raw?.cost_info?.call_duration_seconds) ??
       0;
@@ -156,8 +158,8 @@ export async function POST(request: Request) {
     // session, so the dashboard cannot play them back for the client. Anything
     // that is not an absolute link (Dograh sends storage keys like
     // "recordings/23.wav") is dropped rather than stored as a dead link.
-    const recording = usableMediaUrl(flat.recording_public_url ?? flat.recording ?? flat.recording_url);
-    const transcript = usableMediaUrl(flat.transcript_public_url ?? flat.transcript ?? flat.transcript_url);
+    let recording = usableMediaUrl(flat.recording_public_url ?? flat.recording ?? flat.recording_url);
+    let transcript = usableMediaUrl(flat.transcript_public_url ?? flat.transcript ?? flat.transcript_url);
     const callTime = cleanString(flat.call_time ?? flat.ended_at ?? flat.created_at);
 
     const supabase = createServerClient();
@@ -171,6 +173,55 @@ export async function POST(request: Request) {
       const { found } = await findExistingCallLog(supabase, runId);
       if (found) {
         return NextResponse.json({ message: 'Already processed', duplicate: true }, { status: 200 });
+      }
+    }
+
+    // --- Trust the run, not the template ----------------------------------
+    // Vaani's webhook node fires at hang-up, and `perform_final_variable_extraction`
+    // has not always finished by then. When it has not, every
+    // {{gathered_context.X}} renders empty and {{cost_info.call_duration_seconds}}
+    // renders 0 - and we would store THAT as the record of the call.
+    //
+    // Run 798 (solar, 2026-09-06) is what this is for: a 70-second call with
+    // house_ownership "own", solar_planning true and lead_score 100 was stored as
+    // a zero-second call with no answers and a lead scored 0. A qualified
+    // customer, presented to the client as a dud. It is a race, so it spoils some
+    // calls and not others.
+    //
+    // The run itself is authoritative and is one request away - the billing path
+    // below already re-reads it for exactly this reason. Fetching it here closes
+    // the race at the source, so the row is right within seconds instead of
+    // waiting up to ten minutes for the reconcile sweep to repair it.
+    //
+    // Best-effort by design: if this fetch fails we still write the thin row,
+    // because a thin record of a real call beats no record, and the sweep will
+    // complete it later.
+    if (runId && (durationRaw <= 0 || !hasQualificationSignal(signals))) {
+      try {
+        const vertical = parseVertical(flat.vertical) ?? DEFAULT_VERTICAL;
+        // A wrong workflow id is harmless: Vaani resolves the run by id and
+        // ignores the workflow in the path (verified on run 798).
+        const workflowId = workflowIdFor(vertical) ?? Number(process.env.DOGRAH_WORKFLOW_ID ?? 1);
+        const full = await dograh.getWorkflowRun(workflowId, runId);
+        if (full && Number(full.id) === runId) {
+          // The payload stays the base so anything Vaani only sends in the
+          // template (lead_id, vertical) survives; the run wins where both have
+          // a value, because the run is the one that is finished.
+          const merged: Record<string, any> = {
+            ...(raw ?? {}),
+            ...full,
+            gathered_context: { ...(raw?.gathered_context ?? {}), ...(full.gathered_context ?? {}) },
+          };
+          raw = merged;
+          flat = flattenPayload(merged);
+          signals = extractCallSignals(merged);
+          durationRaw =
+            cleanNumber(full?.cost_info?.call_duration_seconds) ?? durationRaw;
+          recording = recording ?? usableMediaUrl(full.recording_public_url);
+          transcript = transcript ?? usableMediaUrl(full.transcript_public_url);
+        }
+      } catch (err) {
+        console.warn('[webhook] could not read the run back; storing the payload as sent', { runId, err });
       }
     }
 

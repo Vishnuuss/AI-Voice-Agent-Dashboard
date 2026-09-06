@@ -76,9 +76,11 @@ export async function findExistingCallLog(
   // whether what is already stored is COMPLETE. The webhook fires at hang-up and
   // can land before the provider has finalised duration and uploaded the
   // recording, so "a row exists" does not mean "the call is recorded properly".
+  // gathered_context and lead_id come back too: the sweep needs to know whether
+  // what is stored actually carries a qualification, and which lead to complete.
   let query = supabase
     .from('call_logs')
-    .select('id, duration, recording_url, transcript_url')
+    .select('id, lead_id, duration, recording_url, transcript_url, gathered_context')
     .eq('dograh_run_id', runId);
   if (await hasProviderColumn(supabase, 'call_logs')) {
     query = query.eq('provider', callProvider());
